@@ -1,0 +1,23 @@
+{
+  "id": "safe-mutation",
+  "name": "Safe Mutation",
+  "description": "Frozen-plan mutation workflow with in-thread text confirmation for OpenClaw",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "dataDir": {
+        "type": "string",
+        "description": "Directory for fake store snapshots and mutation plans"
+      },
+      "protectedMutations": {
+        "type": "array",
+        "description": "Explicit protected mutation bindings with write matcher and read invocation",
+        "items": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}

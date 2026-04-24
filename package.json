@@ -1,0 +1,33 @@
+{
+  "name": "openclaw-safe-mutation",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Experimental plugin for validating hook-first safe mutation in OpenClaw",
+  "openclaw": {
+    "extensions": [
+      "./openclaw.entry.ts"
+    ]
+  },
+  "files": [
+    "openclaw.entry.ts",
+    "openclaw.plugin.json",
+    "src/",
+    "skills/",
+    "docs/",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "npm run test:unit && npm run test:integration && npm run test:seams",
+    "test:unit": "vitest run test/unit",
+    "test:integration": "vitest run test/integration",
+    "test:seams": "vitest run test/seams"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "openclaw": "^2026.4.15",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5"
+  }
+}

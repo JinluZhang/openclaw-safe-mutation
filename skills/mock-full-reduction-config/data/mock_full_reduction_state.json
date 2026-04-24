@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "pois": {
+    "10001": {
+      "activity_name": "weekday_lunch_full_reduction",
+      "activity_status": "enabled",
+      "start_time": "2026-04-21T10:00",
+      "end_time": "2026-05-21T22:00",
+      "weekday_mask": "1111100",
+      "min_order_price": 18,
+      "delivery_fee_discount": 2,
+      "tier_1_threshold": 25,
+      "tier_1_discount": 15,
+      "tier_2_threshold": 40,
+      "tier_2_discount": 20,
+      "tier_3_threshold": 60,
+      "tier_3_discount": 30,
+      "stack_with_coupon": true,
+      "stack_with_membership": false,
+      "new_customer_only": false,
+      "vip_only": false,
+      "budget_limit": 1200,
+      "remark": "seeded_for_safe_mutation_demo",
+      "version": 1,
+      "created_at": "2026-04-21T20:00:00",
+      "updated_at": "2026-04-21T20:00:00"
+    },
+    "10002": {
+      "activity_name": "weekend_dinner_full_reduction",
+      "activity_status": "enabled",
+      "start_time": "2026-04-24T16:00",
+      "end_time": "2026-05-24T23:00",
+      "weekday_mask": "0000011",
+      "min_order_price": 25,
+      "delivery_fee_discount": 0,
+      "tier_1_threshold": 35,
+      "tier_1_discount": 10,
+      "tier_2_threshold": 55,
+      "tier_2_discount": 18,
+      "tier_3_threshold": 80,
+      "tier_3_discount": 30,
+      "stack_with_coupon": false,
+      "stack_with_membership": false,
+      "new_customer_only": false,
+      "vip_only": false,
+      "budget_limit": 2000,
+      "remark": "seeded_for_safe_mutation_demo",
+      "version": 1,
+      "created_at": "2026-04-21T20:00:00",
+      "updated_at": "2026-04-21T20:00:00"
+    }
+  }
+}
