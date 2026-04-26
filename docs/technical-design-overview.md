@@ -110,18 +110,20 @@ sequenceDiagram
 - 写入后回读并和冻结 payload 比较，不一致进入 `failed`。
 - 重复确认同一个已完成 plan 不会重复写入。
 
-## 7. 确认与回复抑制设计
+## 7. 确认与普通回复设计
 
 首次写请求被 hook 阻断后，插件会把确认消息直接发回原始对话，然后阻断工具调用。这个时候模型仍可能在同一轮里尝试补一段普通 assistant 回复，例如“我已为你提交修改”。这种回复会误导用户，因为真实写入还没有发生。
 
-因此项目在 `reply_dispatch` 阶段做 suppression，而不是放在 `before_agent_reply`：
+当前策略是不再用 `reply_dispatch` 吞掉普通 assistant final，而是让 `blockReason` 给模型一个明确的回复契约：
 
-- `before_agent_reply` 发生在 LLM turn 开始前，无法覆盖工具中途被 block 后模型补发的最终回复。
-- `reply_dispatch` 位于最终回复分发阶段，可以按 `runId` 吞掉这次普通 assistant 回复。
-- 插件用 `directConfirmationRunIds` 记录已直接发送确认卡片/文本的 run，在 `reply_dispatch` 里删除并标记本轮已完成。
-- `agent_end` 兜底清理 `runId`，避免集合泄漏。
+- 说明本次写工具调用已被阻断，真实写入尚未发生。
+- 说明冻结确认单已经由系统作为单独消息发回原始会话。
+- 要求模型不要重试工具、不要重新生成 payload、不要重复完整确认说明。
+- 要求模型不要说“回复同意我就帮你执行”，而是提示用户：已生成变更确认单，点击确认后系统会自动执行。
 
-这个细节是当前闭环成立的关键之一。否则用户会同时看到“待确认 diff”和模型补出来的普通回复，造成写入状态错觉。
+插件仍然用 `directConfirmationRunIds` 记录当前 run 是否已经投递过确认消息。这个集合不再用于吞 final，只用于防止模型在同一轮看到 tool error 后继续重试写工具，导致重复发送确认单。`agent_end` 兜底清理 `runId`，避免集合泄漏。
+
+这个策略保留普通 assistant final，避免误吞同一轮里的有用信息；代价是依赖模型遵循 `blockReason` 里的回复契约。`blockReason` 因此必须写得像给模型的操作指令，而不是只写内部错误原因。
 
 ## 8. 当前能力边界
 

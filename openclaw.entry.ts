@@ -62,7 +62,21 @@ export default definePluginEntry({
     const missingApprovedPlanReason =
       "This write path requires an approved mutation plan.";
     const confirmationSentBlockReason =
-      "Protected write approval has already been delivered to the originating conversation. Do not repeat approval instructions or promise a follow-up write in the normal assistant reply.";
+      [
+        "SAFE_MUTATION_APPROVAL_SENT.",
+        "The protected write tool call was blocked; the write has not been executed yet.",
+        "A frozen approval request has already been sent as a separate message to the originating conversation.",
+        "In the final assistant reply, do not retry the tool, do not create or modify a payload, do not repeat the full approval request, and do not promise that you personally will execute the write after the user replies.",
+        "Reply briefly in the user's language. For Chinese, say: 已生成变更确认单，点击确认后系统会自动执行。"
+      ].join(" ");
+    const confirmationDeliveryFailedBlockReason = (planId: string) =>
+      [
+        `SAFE_MUTATION_APPROVAL_DELIVERY_FAILED planId=${planId}.`,
+        "The protected write tool call was blocked; the write has not been executed.",
+        "A pending approval plan exists, but the system could not deliver the approval request to the originating conversation.",
+        "Do not ask the user to confirm this plan, because they may not have seen the diff.",
+        "Reply briefly in the user's language that the write was stopped for approval, the confirmation message could not be delivered, and no change was made. Ask the user to retry later or contact an operator."
+      ].join(" ");
     const configuredDataDir = getString(api.pluginConfig?.dataDir);
     const stateDir = api.runtime.state.resolveStateDir();
     const dataDir =
@@ -355,7 +369,9 @@ export default definePluginEntry({
 
               return {
                 block: true,
-                blockReason: `Plan ${protectedWritePlan.plan.planId} is pending approval, but direct delivery to the originating conversation failed.`
+                blockReason: confirmationDeliveryFailedBlockReason(
+                  protectedWritePlan.plan.planId
+                )
               };
             } catch (error) {
               api.logger.warn(
@@ -374,30 +390,6 @@ export default definePluginEntry({
       }
 
       return;
-    });
-
-    // `before_agent_reply` runs before the LLM turn starts, so it cannot suppress
-    // a normal assistant reply emitted after a tool call is blocked mid-turn.
-    api.on("reply_dispatch", async (event, ctx) => {
-      if (!event.runId || !directConfirmationRunIds.has(event.runId)) {
-        return;
-      }
-
-      directConfirmationRunIds.delete(event.runId);
-      const counts = {
-        ...ctx.dispatcher.getQueuedCounts()
-      };
-      counts.final += 1;
-      ctx.recordProcessed("completed", {
-        reason: "safe_mutation_direct_confirmation_sent"
-      });
-      ctx.markIdle("message_completed");
-
-      return {
-        handled: true,
-        queuedFinal: true,
-        counts
-      };
     });
 
     api.on("agent_end", (_event, ctx) => {

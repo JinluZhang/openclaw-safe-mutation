@@ -9,7 +9,7 @@
 - 首次受保护写请求必须先阻断，并把这次真实请求中的最终 payload 冻结为 `MutationPlan`。
 - 用户确认的是冻结 plan，不是让模型重新理解一遍自然语言。
 - 当前文本 ACK 实现中，回复“确认”后由系统直接执行冻结 plan，不依赖模型重试原写工具。
-- `reply_dispatch` 必须负责吞掉“已直接发送确认消息的 run”的普通 assistant 回复；不能放到 `before_agent_reply`。
+- 普通 assistant final 不再由 `reply_dispatch` 吞掉；必须通过明确的 `blockReason` 回复契约降低模型误导用户的概率。
 - 执行器只接受 `planId`，从 store 读取冻结 plan，不能接收临时 payload。
 - 写前必须比较当前快照 hash 和 plan.beforeHash；不一致进入 `conflict`，不写。
 - 写后必须回读验证；不一致进入 `failed`。
@@ -471,25 +471,34 @@ payload 一致性校验：
 
 文本 ACK 不是 slash command。`/mutate-approve` 和 `/mutate-cancel` 是历史形态，不应作为当前主链路前提。
 
-### 5.3 `reply_dispatch`
+### 5.3 普通 assistant final 与 `blockReason`
 
 注册点：`openclaw.entry.ts`
 
-这是防止误导回复的关键 seam。
+首次受保护写请求被阻断后，插件会直接向原始会话发送确认消息。之后模型仍可能根据 tool error 生成普通 assistant final。当前策略是不吞掉这条 final，而是让 `blockReason` 给模型一个明确的回复契约。
 
-必须放在 `reply_dispatch` 的原因：
+`SAFE_MUTATION_APPROVAL_SENT` 的语义：
 
-- 工具调用是在 LLM turn 中途发生的。
-- `before_tool_call` block 后，模型可能继续生成一条普通最终回复。
-- `before_agent_reply` 发生在 LLM turn 开始前，无法拦住这个“工具中途被 block 后的补充回复”。
-- `reply_dispatch` 才能在最终回复分发阶段按 `runId` 把它吞掉。
+- 本次写工具调用已被阻断，真实写入尚未发生。
+- 冻结确认单已经作为单独消息发送到原始会话。
+- 模型不要重试工具、不要重新生成 payload、不要重复完整确认说明。
+- 模型不要承诺“回复同意我就帮你执行”；应该提示用户：已生成变更确认单，点击确认后系统会自动执行。
+- 确认后执行者是系统的冻结计划执行器，不是模型再次发起写入。
 
-实现要点：
+`SAFE_MUTATION_APPROVAL_DELIVERY_FAILED` 的语义：
+
+- 本次写工具调用已被阻断，真实写入没有发生。
+- 系统创建了 pending plan，但确认消息没有成功投递到原始会话。
+- 模型不能要求用户直接确认这个 plan，因为用户可能没有看到 diff。
+- 模型应该说明确认消息发送失败、没有发生变更，并建议稍后重试或联系管理员。
+
+`directConfirmationRunIds` 仍然保留，但职责改变：
 
 - 在直接发送确认消息成功后，把 `runId` 放入 `directConfirmationRunIds`。
-- `reply_dispatch` 命中该 `runId` 后删除集合项，调用 `recordProcessed` 和 `markIdle`，返回 `{ handled: true, queuedFinal: true, counts }`。
-- `agent_end` 再兜底删除 `runId`。
-- blockReason 只能提示模型，不是可靠 suppression；真正可靠的 suppression 是事件分发层吞掉回复。
+- 同一 run 内如果模型再次调用相同受保护写工具，直接返回同一类 `blockReason`，不重复发送确认单。
+- `agent_end` 兜底删除 `runId`，避免集合泄漏。
+
+注意：`blockReason` 不是强约束，模型仍可能措辞不理想。这里是在“保留普通 final”和“减少误导回复”之间取中间方案。
 
 ## 6. 写请求解析细节
 
@@ -689,14 +698,14 @@ channel:accountId:senderId
 - `test/integration/workflow.test.ts`：成功、冲突、回读失败、幂等、字段目录、tier 同步、跨 session approve/cancel、不同 principal 拒绝。
 - `test/integration/tool-backed-workflow.test.ts`：真实 mock CLI read/write/verify 闭环。
 
-重写时至少要保留这些测试语义。尤其是 `reply_dispatch` suppression 当前缺少专门测试，如果继续演进，应该补 seam test 覆盖“确认消息已直接发送后，普通 assistant final 被吞掉”的场景。
+重写时至少要保留这些测试语义。如果继续演进，应该补入口层 seam test 覆盖“确认消息已直接发送后，`blockReason` 能约束普通 assistant final 的推荐回复语义，并且同一 run 不重复发送确认单”的场景。
 
 ## 11. 常见坑位清单
 
 - 不要让模型在用户确认后再生成一次 payload；确认后只能执行 `plan.writePayload`。
 - 不要把 `before_tool_call` 只当提醒 hook；它必须 fail closed。
-- 不要把 suppression 放进 `before_agent_reply`；它挡不住工具中途被 block 后模型补一句的场景。
-- 不要只靠 blockReason 约束模型回复；必须在 `reply_dispatch` 事件层处理。
+- 不要把普通 assistant final 误认为已经执行；`blockReason` 必须明确告诉模型写入未发生、确认后由系统执行冻结计划。
+- 不要让 `SAFE_MUTATION_APPROVAL_DELIVERY_FAILED` 引导用户确认一个没看到 diff 的 plan。
 - 不要用 `sessionKey` 校验 ACK；session 变化不应让同一个人无法确认。
 - 不要直接字符串比较 approval principal；必须规范化。
 - 不要允许同店多个不同 active plan 并存，除非实现了明确的合并和冲突策略。
@@ -707,7 +716,7 @@ channel:accountId:senderId
 - 不要接受未知 CLI flag；这类请求应 fail closed。
 - 不要只登记写工具名；缺少 `protectedMutations` read binding 的写路径必须 fail closed。
 - 不要在 hook 里根据脚本名、参数名猜读命令；读操作必须来自 binding。
-- 不要忘记清理 `directConfirmationRunIds`；`reply_dispatch` 和 `agent_end` 都要清。
+- 不要忘记清理 `directConfirmationRunIds`；当前由 `agent_end` 兜底清理。
 - 不要新增受保护 direct tool 后忘记实现执行 adapter；否则文本确认会创建无法执行的 plan。
 - 不要把终态 plan 更新回活跃态；重复操作应幂等返回。
 
