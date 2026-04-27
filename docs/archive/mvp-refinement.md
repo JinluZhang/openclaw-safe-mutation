@@ -1,5 +1,7 @@
 # MVP 细化
 
+> 历史归档：本文记录早期 `/mutate` MVP 方案，不代表当前实现。当前设计以 `protectedMutations` + `before_tool_call` hook-first 链路为准，详见 `docs/architecture.md`、`docs/technical-design-overview.md` 和 `docs/key-technical-notes.md`。
+
 ## 目标
 
 第一版不是要把所有 20 个参数场景做完，而是先验证下面这条安全链路是闭合的：

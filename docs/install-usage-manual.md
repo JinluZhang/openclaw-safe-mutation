@@ -163,7 +163,15 @@ python3 skills/mock-full-reduction-config/scripts/mock_full_reduction_cli.py wri
 - before / after diff
 - 确认和取消方式
 
-用户回复：
+同时，被阻断的工具调用会把 `SAFE_MUTATION_APPROVAL_SENT` 作为 `blockReason` 返回给模型。当前不再通过 `reply_dispatch` 吞掉普通 assistant final，因此模型应只给用户一个简短状态说明：
+
+```text
+已生成变更确认单，点击确认后系统会自动执行。
+```
+
+这条普通 assistant final 不表示已经写入；真正执行仍然只由确认消息对应的 ACK 触发。
+
+当前文本 fallback 可以回复：
 
 ```text
 确认
@@ -175,12 +183,14 @@ python3 skills/mock-full-reduction-config/scripts/mock_full_reduction_cli.py wri
 取消
 ```
 
-如果同一个审批人有多个 pending plan，需要回复：
+如果同一个审批人有多个 pending plan，文本 fallback 需要回复：
 
 ```text
 确认 plan_xxx
 取消 plan_xxx
 ```
+
+未来或渠道侧如果把确认消息渲染成按钮/卡片，可以把 `planId` 作为隐藏句柄放入回调载荷，让用户点击“确认”或“取消”；后端仍然走同一套 plan 状态、审批身份和过期校验。
 
 ## 6. 批量部署建议
 
@@ -309,6 +319,8 @@ chmod +x "$WORKSPACE/skills/mock-full-reduction-config/scripts/mock_full_reducti
 - 当前会话是否有可解析的 `sessionKey`。
 - session store 里是否有原始渠道的 `deliveryContext` 或 `lastChannel` / `lastTo`。
 - 渠道 outbound adapter 是否支持 `sendText`。
+
+如果确认消息无法投递，工具调用会返回 `SAFE_MUTATION_APPROVAL_DELIVERY_FAILED`。模型不应引导用户直接确认这个 plan，因为用户可能没有看到 diff；应说明确认消息发送失败、没有发生变更，并建议稍后重试或联系管理员。
 
 ### 回复确认后进入 conflict
 

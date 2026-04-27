@@ -44,21 +44,21 @@
 
 核心设计只有一句话：
 
-**第一次写请求先拦下，把它原本要写的精确 payload 冻结成 plan，发出确认；只有收到 ACK，且后续重试请求与冻结内容完全一致时，hook 才放行。**
+**第一次写请求先拦下，把它原本要写的精确 payload 冻结成 plan，发出确认；当前文本 ACK 链路在用户确认后由系统直接执行冻结 plan，不再让模型重试原写工具。**
 
 这里真正关键的不是命令形式，而是这四个动作：
 
 1. 拦截
 2. 冻结
 3. 确认
-4. 放行
+4. 执行
 
 其中：
 
 - `before_tool_call` 是最终硬闸门
 - `protectedMutations` registry 是写入口到读/写/验证路径的显式配置
 - `MutationPlan` 是唯一可信的冻结对象
-- ACK 只是把 plan 从“待确认”推进到“已批准”的一种事件
+- ACK 是把 plan 从“待确认”推进到执行链路的一种事件
 
 ## 5. 为什么要做 hook-first，而不是 skill-first
 
@@ -98,8 +98,8 @@ hook-first 方案直接使用 skill 即将提交的真实 payload：
    - 向原对话发出确认信息
    - 阻断本次写请求
 4. 用户发送 ACK
-5. 系统把对应 plan 标记为 `approved`
-6. 当前文本 ACK 实现直接执行冻结 plan；未来也可由调用方再次发起同一写工具调用并带上 `approvedPlanId`
+5. 系统校验审批身份、plan 状态和过期时间
+6. 当前文本 ACK 实现把 plan 标记为 `approved` 后立即执行冻结 plan；未来也可由调用方再次发起同一写工具调用并带上 `approvedPlanId`
 7. 执行前重新使用冻结的 read invocation 读取当前快照，校验 `beforeHash` 避免 conflict
 8. 写入使用冻结的 write invocation 和 `writePayload`
 9. 写后使用 verify/read invocation 回读验证
@@ -112,7 +112,7 @@ hook-first 方案直接使用 skill 即将提交的真实 payload：
 
 只有全部通过，hook 才允许本次工具真正执行写入。
 
-这就是项目最核心的“hook 拦截写操作 -> 发出确认 -> 得到 ACK 才最终写入”的闭环。
+这就是项目最核心的“hook 拦截写操作 -> 发出确认 -> 得到 ACK 后由系统执行冻结 plan”的闭环。
 
 ## 7. `MutationPlan` 的职责
 
@@ -175,19 +175,19 @@ hook 只做一件事：守住最终写入口。
 
 ACK 是必须的，但 ACK 的外形不是必须的。
 
-当前仓库里保留了：
+当前仓库里保留的是命令实现模块：
 
-- `/mutate-approve <planId>`
-- `/mutate-cancel <planId>`
+- `runMutateApproveCommand`
+- `runMutateCancelCommand`
 
 需要明确一点：当前 demo 的文本 ACK 实现并不是“批准后等待 skill 重试原写工具”。
 在现有代码里，`before_dispatch` 消费 `确认` / `取消` 文本后，会直接调用
 `runMutateApproveCommand` / `runMutateCancelCommand`；其中 `runMutateApproveCommand`
 会立刻执行冻结 plan。也就是说，当前文本确认链路里，“回复确认”本身就是执行入口。
 
-这是当前最小实现里最便宜的确认通道，不代表最终形态必须是 slash command。
+这是当前最小实现里最便宜的确认通道，不代表最终形态必须是文本回复或 slash command。历史 `/mutate-approve <planId>`、`/mutate-cancel <planId>` 不是当前主链路前提。
 
-在真实系统里，ACK 完全可以替换成：
+在真实系统里，ACK 完全可以替换或扩展为：
 
 - 飞书卡片按钮
 - 审批回调
@@ -209,12 +209,12 @@ ACK 是必须的，但 ACK 的外形不是必须的。
 
 ## 10. 确认句柄设计
 
-`planId` 不必展示给用户，但可以直接作为结构化确认里的隐藏句柄使用。
+当前文本 renderer 会展示 `planId`，主要用于多 pending plan 时让用户能手工指定。结构化 UI 里，`planId` 不必展示给用户，可以作为隐藏句柄使用。
 
 推荐做法是：
 
-- 对用户展示变更内容和确认按钮
-- 不在文案中暴露 `planId`
+- 对用户展示变更内容和确认入口
+- 文本 fallback 可以展示 `planId`；按钮/卡片形态不在文案中暴露 `planId`
 - 在卡片按钮、回调 payload 或其他结构化 ACK 载荷里携带 `planId`
 - 系统收到 ACK 后，用 `planId` 找到对应 plan 并继续做身份、状态、过期校验
 
@@ -270,10 +270,10 @@ ACK 是必须的，但 ACK 的外形不是必须的。
 
 而下面这些更接近当前 demo / 辅助能力：
 
-- `src/commands/mutate.ts`
-  - 显式构造 plan 的演示入口
 - `src/commands/mutate-approve.ts`
   - 当前文本 ACK 的实现
+- `src/commands/mutate-cancel.ts`
+  - 当前文本取消的实现
 - `src/executor.ts`
   - 当前 demo 中用于直接执行和回读验证的路径
 
@@ -289,7 +289,8 @@ ACK 是必须的，但 ACK 的外形不是必须的。
 - 每个受保护写路径必须有显式 mutation binding，尤其是读路径
 - 首次写请求一律先被 hook 拦下
 - 直接冻结这次真实请求中的 payload
-- 用户确认后，只有与冻结内容完全一致的重试请求才允许继续
+- 当前文本确认后，由系统执行冻结 plan，不依赖模型重新发起写工具
+- `approvedPlanId` 重试路径仍保留为未来结构化审批后的兼容形态；若走该形态，只有与冻结内容完全一致的重试请求才允许继续
 - 审批身份校验以 `channel + senderId` 为主，`accountId` 作为可选增强
 - 不再把 `sessionKey` 当成确认前提
 - `planId` 可作为隐藏确认句柄放入 callback payload，不要求展示给用户

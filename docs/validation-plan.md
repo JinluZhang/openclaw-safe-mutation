@@ -10,6 +10,7 @@
 - ACK 后的状态漂移会被拦住
 - 写入成功必须以回读结果为准
 - 重复确认不会触发重复写入
+- 普通 assistant final 不再被 `reply_dispatch` 吞掉，但 `blockReason` 必须清楚告诉模型写入尚未发生
 
 ## 分层验证策略
 
@@ -97,6 +98,7 @@
 
 - `api.on("before_dispatch", ...)` 能消费确认 / 取消文本
 - `api.on("before_tool_call", ...)` 能阻断裸写入
+- 插件不再注册 `reply_dispatch`
 - 受保护直接写工具缺少 read binding 时 block
 - unrelated `exec` 命令 allow，匹配 binding 的 `exec` 写命令 block
 - 带 `approvedPlanId` 的请求只有在 payload 完全一致时才放行
@@ -111,6 +113,8 @@
 - payload 少一个字段、多个字段、字段值不同，都必须 block
 - payload 完全一致时 allow
 - 文本确认在唯一待确认 plan 场景下可以不显式携带 `planId`
+- 确认消息已直接发送后，同一 run 内模型重试同一受保护写工具不会重复发送确认消息
+- `SAFE_MUTATION_APPROVAL_SENT` 的 blockReason 推荐普通 final 话术为“已生成变更确认单，点击确认后系统会自动执行。”
 
 ### L4. 手工干跑
 
@@ -156,7 +160,7 @@
 
 - 单次受保护写请求能从拦截走到成功执行
 - diff 展示包含 before / after
-- 重复点击确认幂等
+- 重复 ACK 幂等，不会重复写入
 - plan 过期后不可执行
 
 ### 观测验收

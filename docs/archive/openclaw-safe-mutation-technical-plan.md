@@ -1,5 +1,7 @@
 # OpenClaw 安全写入工作流技术方案
 
+> 历史归档：本文记录早期自然语言 `/mutate` / GUI 卡片方案，不代表当前实现。当前设计以 `protectedMutations` + `before_tool_call` hook-first 链路为准，确认后由系统执行冻结 plan，普通 assistant final 通过 `blockReason` 约束而不是 `reply_dispatch` 吞掉。详见 `docs/architecture.md`、`docs/technical-design-overview.md` 和 `docs/key-technical-notes.md`。
+
 ## 文档目的
 
 这份文档用于承接下一次新 session 的编码与验证工作，目标是为“高风险业务写入”设计一套在 OpenClaw 上可实现、可验证、可演进的技术方案。
