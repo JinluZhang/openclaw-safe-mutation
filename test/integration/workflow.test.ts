@@ -7,7 +7,34 @@ import { buildApprovalPrincipal } from "../../src/approval-principal.js";
 import { runMutateApproveCommand } from "../../src/commands/mutate-approve.js";
 import { runMutateCancelCommand } from "../../src/commands/mutate-cancel.js";
 import { ensureProtectedWritePlan } from "../../src/protected-write-plan.js";
+import type { ProtectedFieldDefinition } from "../../src/field-schema.js";
 import { InMemoryMutationPlanStore } from "../helpers/in-memory-plan-store.js";
+
+const promotionFieldSchema: ProtectedFieldDefinition[] = [
+  {
+    fieldId: "full_reduction_tiers",
+    label: "满减档位",
+    valueType: "json",
+    readPath: "promotion.full_reduction_tiers",
+    operations: ["replace_item"]
+  }
+];
+
+const scalarFieldSchema: ProtectedFieldDefinition[] = [
+  ...promotionFieldSchema,
+  {
+    fieldId: "activity_name",
+    label: "活动名称",
+    valueType: "string",
+    readPath: "activity_name"
+  },
+  {
+    fieldId: "tier_1_threshold",
+    label: "第一档门槛",
+    valueType: "decimal",
+    readPath: "tier_1_threshold"
+  }
+];
 
 const beforeSnapshot = {
   promotion: {
@@ -137,6 +164,7 @@ async function createPendingPlan(params: {
   now: number;
   sessionKey?: string;
   approvalPrincipal?: string;
+  fieldSchema?: ProtectedFieldDefinition[];
 }) {
   const approvalPrincipal =
     params.approvalPrincipal ??
@@ -155,6 +183,7 @@ async function createPendingPlan(params: {
     {
       storeId: "store-1",
       writePayload: params.writePayload,
+      fieldSchema: params.fieldSchema ?? promotionFieldSchema,
       requestedBy: "alice",
       approvalChannel: "feishu",
       approvalSenderId: "alice",
@@ -416,7 +445,7 @@ describe("integration workflow", () => {
     expect(writeAdapter.calls).toHaveLength(1);
   });
 
-  it("supports generic scalar field updates from the full field catalog", async () => {
+  it("supports generic scalar field updates from the field schema", async () => {
     const planStore = new InMemoryMutationPlanStore();
     const readAdapter = new FakeReadAdapter(scalarBeforeSnapshot);
     const verifyAdapter = new FakeVerifyAdapter(scalarBeforeSnapshot);
@@ -428,6 +457,7 @@ describe("integration workflow", () => {
       planStore,
       readAdapter,
       writePayload: scalarAfterSnapshot,
+      fieldSchema: scalarFieldSchema,
       planId: "plan-activity-name",
       now: 300
     });
@@ -461,7 +491,7 @@ describe("integration workflow", () => {
     ]);
   });
 
-  it("keeps tier scalar fields and promotion.full_reduction_tiers in sync", async () => {
+  it("treats tier scalar fields as ordinary schema fields", async () => {
     const planStore = new InMemoryMutationPlanStore();
     const readAdapter = new FakeReadAdapter(scalarBeforeSnapshot);
     const verifyAdapter = new FakeVerifyAdapter(scalarBeforeSnapshot);
@@ -473,6 +503,7 @@ describe("integration workflow", () => {
       planStore,
       readAdapter,
       writePayload: tierScalarAfterSnapshot,
+      fieldSchema: scalarFieldSchema,
       planId: "plan-tier-threshold",
       now: 400
     });
@@ -497,7 +528,9 @@ describe("integration workflow", () => {
     );
 
     expect(finalPlan.status).toBe("succeeded");
-    expect(finalPlan.mutationKind).toBe("protected_write.full_reduction_tiers");
+    expect(finalPlan.mutationKind).toBe(
+      "protected_write.full_reduction_tiers+tier_1_threshold"
+    );
     expect(writeAdapter.calls).toEqual([
       {
         storeId: "store-1",

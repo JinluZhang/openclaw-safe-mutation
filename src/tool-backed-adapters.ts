@@ -9,7 +9,8 @@ import type {
 import type {
   MutationExecutionContext,
   MutationInvocation,
-  SnapshotNormalizerId
+  SnapshotNormalizer,
+  SnapshotNormalizerSpec
 } from "./intent-types.js";
 import { getValueAtPath, setValueAtPath } from "./object-path.js";
 
@@ -81,10 +82,68 @@ function normalizeMockFullReductionReadSnapshot(
   return setValueAtPath(normalized, "promotion.full_reduction_tiers", tiers);
 }
 
-function applySnapshotNormalizer(
-  normalizer: SnapshotNormalizerId | undefined,
+function deletePath(
+  snapshot: Record<string, unknown>,
+  path: string
+): Record<string, unknown> {
+  const parts = path.split(".").filter(Boolean);
+  const root = structuredClone(snapshot);
+  let cursor: unknown = root;
+
+  for (const part of parts.slice(0, -1)) {
+    if (!isRecord(cursor)) {
+      return root;
+    }
+
+    cursor = cursor[part];
+  }
+
+  if (isRecord(cursor) && parts.length > 0) {
+    delete cursor[parts[parts.length - 1]!];
+  }
+
+  return root;
+}
+
+function applyNormalizerSpec(
+  normalizer: SnapshotNormalizerSpec,
   snapshot: Record<string, unknown>
 ): Record<string, unknown> {
+  switch (normalizer.kind) {
+    case "none":
+      return structuredClone(snapshot);
+    case "stripFields":
+      return normalizer.paths.reduce(
+        (current, path) => deletePath(current, path),
+        structuredClone(snapshot)
+      );
+    case "pickPath": {
+      const selected = getValueAtPath(snapshot, normalizer.path);
+      return isRecord(selected) ? structuredClone(selected) : {};
+    }
+    case "renamePath": {
+      const selected = getValueAtPath(snapshot, normalizer.from);
+      const stripped = deletePath(snapshot, normalizer.from);
+      return selected === undefined
+        ? stripped
+        : setValueAtPath(stripped, normalizer.to, selected);
+    }
+    case "compose":
+      return normalizer.steps.reduce(
+        (current, step) => applyNormalizerSpec(step, current),
+        structuredClone(snapshot)
+      );
+  }
+}
+
+function applySnapshotNormalizer(
+  normalizer: SnapshotNormalizer | undefined,
+  snapshot: Record<string, unknown>
+): Record<string, unknown> {
+  if (typeof normalizer === "object" && normalizer !== null) {
+    return applyNormalizerSpec(normalizer, snapshot);
+  }
+
   switch (normalizer ?? "none") {
     case "none":
       return structuredClone(snapshot);

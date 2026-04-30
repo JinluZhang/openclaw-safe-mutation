@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { renderMutationPlanForText } from "../../src/channels/text-render.js";
 import type { MutationPlan } from "../../src/intent-types.js";
 import { parseTextPlanAction } from "../../src/text-plan-actions.js";
+import { shopFieldSchema } from "../helpers/generic-schema.js";
 
 const pendingPlan: MutationPlan = {
   planId: "plan_123",
@@ -56,6 +57,8 @@ const pendingPlan: MutationPlan = {
       ]
     }
   ],
+  fieldSchemaSnapshot: shopFieldSchema,
+  fieldSchemaHash: "schema-hash",
   requestedBy: "alice",
   sessionKey: "session-1",
   channel: "feishu",

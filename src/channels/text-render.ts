@@ -1,33 +1,46 @@
 import type { MutationPlan } from "../intent-types.js";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+function compactJson(value: unknown): string {
+  return JSON.stringify(value);
 }
 
-function formatValue(value: unknown): string {
+function truncate(value: string): string {
+  return value.length > 160 ? `${value.slice(0, 157)}...` : value;
+}
+
+function formatValue(
+  value: unknown,
+  display?: MutationPlan["diffItems"][number]["display"]
+): string {
   if (value === undefined) {
     return "(empty)";
   }
 
-  if (
-    Array.isArray(value) &&
-    value.every(
-      (item) =>
-        isRecord(item) &&
-        typeof item.threshold === "number" &&
-        typeof item.reduction === "number"
-    )
-  ) {
-    return value
-      .map((item) => `${item.threshold}-${item.reduction}`)
-      .join(", ");
+  if (display?.format === "json") {
+    return truncate(compactJson(value));
+  }
+
+  if (display?.format === "currency" && typeof value === "number") {
+    return String(value);
+  }
+
+  if (display?.format === "percent" && typeof value === "number") {
+    return `${value}%`;
+  }
+
+  if (display?.format === "template" && display.template) {
+    return truncate(
+      display.template.replaceAll(/\{\{value\}\}/gu, () =>
+        typeof value === "string" ? value : compactJson(value)
+      )
+    );
   }
 
   if (typeof value === "string") {
-    return value;
+    return truncate(value);
   }
 
-  return JSON.stringify(value);
+  return truncate(compactJson(value));
 }
 
 export function renderMutationPlanStatusForText(plan: MutationPlan): string {
@@ -55,7 +68,7 @@ export function renderMutationPlanForText(plan: MutationPlan): string {
 
   for (const diffItem of plan.diffItems) {
     lines.push(
-      `- ${diffItem.label}: ${formatValue(diffItem.before)} -> ${formatValue(diffItem.after)}`
+      `- ${diffItem.label}: ${formatValue(diffItem.before, diffItem.display)} -> ${formatValue(diffItem.after, diffItem.display)}`
     );
   }
 

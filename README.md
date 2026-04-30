@@ -4,7 +4,7 @@
 
 当前实现的核心闭环是：
 
-- 通过 `protectedMutations` registry 显式声明受保护写入口、目标对象抽取、读 invocation 和字段映射
+- 通过 `protectedMutations` registry 显式声明受保护写入口、目标对象抽取、字段 schema、读 invocation 和写/验证规则
 - 拦截匹配 binding 的受保护写工具或等价 `exec` 写命令
 - 从真实写请求中提取并冻结最终 `payload`
 - 生成 `MutationPlan` 并把确认消息回推到原始会话
@@ -15,13 +15,13 @@
 
 ## 当前范围
 
-- 保护对象：`mock-full-reduction-config`
+- 保护对象：由 `protectedMutations` 显式配置，mock 满减仅作为示例
 - 写入口：直接工具调用和可识别的 `exec` 写命令
-- 配置方式：默认内置一条 `mock-full-reduction.exec` binding；生产接入通过 `protectedMutations` 显式声明读写路径
+- 配置方式：默认不启用任何受保护 binding；生产接入通过 `protectedMutations` 显式声明 schema、读写路径和匹配规则
 - 确认方式：会话内文本确认
 - 审批身份：`channel + senderId`，`accountId` 作为可选增强
 - 数据层：文件版 plan store + 工具调用适配器
-- 字段范围：当前 catalog 中定义的 mock 满减配置可写字段
+- 字段范围：每条 binding 自带 inline / shell / HTTP 解析得到的字段 schema
 
 重要约束：只把写工具名加入保护列表是不够的。每个受保护写路径必须有明确的 read binding；无法匹配 binding 的受保护直接写工具会 fail closed，不会靠命令名或参数猜读操作。
 

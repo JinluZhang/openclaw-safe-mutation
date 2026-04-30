@@ -34,6 +34,10 @@ export interface DiffItem {
   label: string;
   before: unknown;
   after: unknown;
+  display?: {
+    format?: "plain" | "json" | "currency" | "percent" | "template";
+    template?: string;
+  };
 }
 
 export interface MutationResult {
@@ -50,12 +54,21 @@ export type SnapshotNormalizerId =
   | "mockFullReductionRead"
   | "stripVolatileFields";
 
+export type SnapshotNormalizerSpec =
+  | { kind: "none" }
+  | { kind: "stripFields"; paths: string[] }
+  | { kind: "pickPath"; path: string }
+  | { kind: "renamePath"; from: string; to: string }
+  | { kind: "compose"; steps: SnapshotNormalizerSpec[] };
+
+export type SnapshotNormalizer = SnapshotNormalizerId | SnapshotNormalizerSpec;
+
 export interface ShellMutationInvocation {
   kind: "shell";
   command: string;
   workdir?: string;
   resultPath?: string;
-  normalizer?: SnapshotNormalizerId;
+  normalizer?: SnapshotNormalizer;
 }
 
 export interface HttpMutationInvocation {
@@ -65,7 +78,7 @@ export interface HttpMutationInvocation {
   headers?: Record<string, string>;
   body?: string;
   resultPath?: string;
-  normalizer?: SnapshotNormalizerId;
+  normalizer?: SnapshotNormalizer;
 }
 
 export type MutationInvocation =
@@ -80,7 +93,7 @@ export interface ConfiguredMutationExecutionContext {
   readInvocation: MutationInvocation;
   writeInvocation: MutationInvocation;
   verifyInvocation?: MutationInvocation;
-  compareNormalizer?: SnapshotNormalizerId;
+  compareNormalizer?: SnapshotNormalizer;
   workdir?: string;
 }
 
@@ -98,6 +111,9 @@ export interface MutationPlan {
   resolvedPatch: ResolvedPatch;
   writePayload: Record<string, unknown>;
   diffItems: DiffItem[];
+  fieldSchemaSnapshot: import("./field-schema.js").ProtectedFieldDefinition[];
+  fieldSchemaHash: string;
+  bindingSnapshot?: unknown;
   requestedBy: string;
   approvalChannel?: string;
   approvalSenderId?: string;

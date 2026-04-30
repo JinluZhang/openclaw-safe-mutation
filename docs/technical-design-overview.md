@@ -233,7 +233,7 @@ sequenceDiagram
 
 1. 增加一条 mutation binding，声明写入口、目标对象、字段映射和 `read` invocation。
 2. 如 direct tool 需要由文本 ACK 直接执行，再显式声明 `write` invocation。
-3. 必要时补充 normalizer、`resultPath` 和 catalog 字段。
+3. 必要时补充 normalizer、`resultPath` 和字段 schema。
 
 业务 skill 本身不需要重构成统一命令协议。
 
@@ -281,7 +281,7 @@ sequenceDiagram
 当前仓库覆盖的是最小可验证闭环：
 
 - 保护工具：`mock-full-reduction-config`。
-- 入口：默认内置 `mock-full-reduction.exec` binding，识别 mock CLI `exec` 写命令；受保护直接写工具若没有 binding 会 fail closed。
+- 入口：默认不启用任何受保护 binding；测试和示例通过显式 `protectedMutations` binding 识别 mock CLI `exec` 写命令，受保护直接写工具若没有 binding 会 fail closed。
 - 确认方式：确认消息发回原会话；当前文本 fallback 支持回复“确认/取消”，审批身份不绑定原 `sessionKey`。
 - 执行路径：tool-backed adapter 支持冻结的 shell/http invocation；当前真实测试覆盖 mock CLI shell 场景。
 - 存储：文件版 plan store。

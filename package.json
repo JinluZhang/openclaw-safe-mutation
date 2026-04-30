@@ -13,6 +13,7 @@
     "openclaw.entry.ts",
     "openclaw.plugin.json",
     "src/",
+    "examples/",
     "skills/",
     "docs/",
     "README.md"

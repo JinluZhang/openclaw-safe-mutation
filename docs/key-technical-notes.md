@@ -18,24 +18,24 @@
 
 ## 2. 核心对象模型
 
-### 2.1 `ParameterCatalog`
+### 2.1 `ProtectedFieldDefinition`
 
-位置：`src/catalog.ts`
+位置：`src/field-schema.ts`
 
-`ParameterCatalog` 是受保护字段白名单，也是 diff、payload 对比和 exec flag 解析的 source of truth。
+`ProtectedFieldDefinition[]` 是每条 binding 的受保护字段白名单，也是 diff、payload 对比和 exec flag 解析的 source of truth。
 
 关键字段：
 
 ```ts
-interface ParameterCatalogItem {
+interface ProtectedFieldDefinition {
   // 平台内部稳定字段 ID。所有 patch、diff、校验都引用它，不直接依赖中文名或 CLI flag。
   fieldId: string;
 
-  // 给用户展示的字段名列表。通常 labels[0] 是中文业务名，后面可以放技术名。
-  labels: string[];
+  // CLI 写命令中的字段 flag。mutableFlagsFromSchema 会读取它。
+  flag?: string;
 
-  // 用户自然语言里可能出现的别名。用于意图归一化或规则匹配。
-  aliases: string[];
+  // 给用户展示的字段名。
+  label?: string;
 
   // 字段说明。可用于文档、提示词或调试，不应作为唯一执行依据。
   description: string;
@@ -44,64 +44,64 @@ interface ParameterCatalogItem {
   valueType: ParameterValueType;
 
   // 字段在完整 snapshot / writePayload 里的路径，支持点号路径。
-  apiPath: string;
+  readPath: string;
 
   // 最终写 payload 里是否要求包含该字段。全量写接口通常为 true。
-  requiredInWritePayload: boolean;
+  requiredInPayload?: boolean;
 
   // 字段允许的变更操作。普通字段多为 set，列表字段可能是 replace_item。
-  supportsOperations: MutationOperation[];
+  operations?: MutationOperation[];
 }
 ```
 
 实现要求：
 
-- 任何可写字段都必须在 catalog 中注册。
+- 任何可写字段都必须在 binding 的 field schema 中注册。
 - 解析层不能接受未知 `fieldId` 或未知 CLI flag。
-- diff 使用 `apiPath` 从 before/after snapshot 取值。
-- `full_reduction_tiers` 与 `tier_1_threshold` 等标量字段是同一业务视图的两种表现，必须保持同步。
+- diff 使用字段 schema 的 `readPath` 从 before/after snapshot 取值。
+- `full_reduction_tiers` 与 `tier_1_threshold` 等业务派生关系不再由核心硬编码；示例或业务 skill 应通过一致的读写 schema、normalizer 或 transformer 处理。
 
 生命周期：
 
 1. 生成阶段
 
-   当前代码里 `ParameterCatalogItem` 不是每次请求动态生成的，而是在 `src/catalog.ts` 里以 `parameterCatalog` 常量静态定义。Node 加载这个模块时会创建数组和其中每个字段对象，之后由 ESM module cache 复用。
+   当前代码里字段定义来自每条 `protectedMutations` binding 的 `fieldSchema`。schema 可以 inline 配置，也可以从 shell/HTTP 机器可读 schema 动态发现，并在 plan 创建时冻结。
 
-   如果真实系统以 CLI 为 source of truth，那么合理实现不是让每次写请求都解析 `--help`，而是在插件启动或构建阶段读取 CLI 的机器可读 schema / help 结果，把 CLI flag、类型、描述等信息编译成同样形态的 `ParameterCatalogItem[]`。运行时其他模块仍然只依赖 catalog，不直接散落解析 CLI 文案。
+   如果真实系统以 CLI 为 source of truth，合理实现不是解析人类 `--help`，而是提供类似 `schema --format json` 的机器可读契约，返回 CLI flag、类型、描述、readPath 等字段元数据。
 
 2. 注册 / 派生阶段
 
-   `src/mutation-registry.ts` 会读取 `parameterCatalog` 派生默认 binding。例如当前默认 exec binding 用 `fieldId.replaceAll("_", "-")` 推导 CLI flag，把 `tier_1_threshold` 映射成 `--tier-1-threshold`。如果真实 CLI flag 不能这样推导，就必须在 binding 里显式配置 `mutableFlags` 到 `fieldId` 的映射。
+   `src/mutation-registry.ts` 会先解析 binding 级 schema。`mutableFlagsFromSchema: true` 时，schema 中带 `flag` 的字段自动成为可写 CLI flag；也可以用 `mutableFlags` 显式配置 flag 到 `fieldId` 的映射。
 
 3. 请求解析阶段
 
-   当 `before_tool_call` 调用 `resolveProtectedWriteRequest` 时，catalog 会用于把 CLI 字符串参数解析成正确类型。例如 `valueType: "decimal"` 会让 `"14"` 变成数字 `14`。未知 `fieldId` 或未知 flag 必须 fail closed。
+   当 `before_tool_call` 调用 `resolveProtectedWriteRequest` 时，已解析 schema 会用于把 CLI 字符串参数解析成正确类型。例如 `valueType: "decimal"` 会让 `"14"` 变成数字 `14`。未知 `fieldId` 或未知 flag 必须 fail closed。
 
 4. payload 构造阶段
 
-   patch 型写入口会先读 beforeSnapshot，再调用 `buildWritePayload(beforeSnapshot, resolvedPatch, parameterCatalog)`。这里 catalog 负责把 `fieldId` 映射到 `apiPath`，把局部字段变更合并成完整 writePayload。
+   patch 型写入口会先读 beforeSnapshot，再调用 `buildWritePayload(beforeSnapshot, resolvedPatch, fieldSchema)`。这里 schema 负责把 `fieldId` 映射到 `readPath`，把局部字段变更合并成完整 writePayload。
 
 5. plan 冻结阶段
 
-   `ensureProtectedWritePlan` 会遍历 catalog，从 `beforeSnapshot` 和 `writePayload` 中按 `apiPath` 比较每个字段，反推出本次真实变化的字段，生成 `resolvedPatch`、`mutationKind`、`interpretationText` 和 `diffItems`。
+   `ensureProtectedWritePlan` 会遍历冻结的 field schema，从 `beforeSnapshot` 和 `writePayload` 中按 `readPath` 比较每个字段，反推出本次真实变化的字段，生成 `resolvedPatch`、`mutationKind`、`interpretationText` 和 `diffItems`。
 
 6. 展示阶段
 
-   `buildDiffItems` 和 `renderMutationPlanForText` 会用 catalog 的 `labels` 生成用户可读的确认文案。
+   `buildDiffItems` 和 `renderMutationPlanForText` 会用冻结 schema 的 `label` 和 `display` 生成用户可读的确认文案。
 
 7. 执行阶段
 
-   执行冻结 plan 时主要依赖 `plan.writePayload`、`plan.beforeHash` 和 `plan.executionContext`，不再重新依赖 catalog 生成写入内容。catalog 在执行阶段不是最终依据，避免确认后再次“解释字段”导致 payload 漂移。
+   执行冻结 plan 时主要依赖 `plan.writePayload`、`plan.beforeHash` 和 `plan.executionContext`，不再重新加载 schema 生成写入内容。冻结 plan 是执行阶段的最终依据，避免确认后再次“解释字段”导致 payload 漂移。
 
 8. 销毁阶段
 
-   catalog 没有业务上的销毁动作。它是进程内元数据，通常随插件进程结束或模块卸载一起释放。单个 `MutationPlan` 不持有完整 catalog，只保存 `fieldId`、`diffItems` 和冻结 payload。
+   schema cache 没有业务上的销毁动作。它是进程内元数据，通常随插件进程结束或模块卸载一起释放。单个 `MutationPlan` 会保存完整 `fieldSchemaSnapshot`、`fieldSchemaHash`、`diffItems` 和冻结 payload。
 
 稳定性要求：
 
-- 不要在还有 active plan 时随意改变 `fieldId` 或 `apiPath`，否则已冻结 plan 的展示、重试校验或后续审计可能对不上。
-- `labels` 和 `description` 的变化主要影响新生成的确认文案；已生成 plan 的 `diffItems` 已经物化，不会自动刷新。
-- 如果 CLI 是 source of truth，CLI schema 版本也应进入 binding 或 catalog 元数据，方便排查“plan 是基于哪一版 CLI 字段定义生成的”。
+- 不要在还有 active plan 时随意改变 `fieldId` 或 `readPath`，否则后续审计可能对不上。
+- `label` 和 `description` 的变化主要影响新生成的确认文案；已生成 plan 的 `diffItems` 和 `fieldSchemaSnapshot` 已经物化，不会自动刷新。
+- 如果 CLI 是 source of truth，CLI schema 版本也应进入 binding 或 schema 元数据，方便排查“plan 是基于哪一版 CLI 字段定义生成的”。
 
 ### 2.2 `ProtectedWriteRequest`
 
@@ -167,8 +167,8 @@ interface ProtectedMutationBinding {
 实现要求：
 
 - `read` 必填，读返回必须是 JSON object，或通过 `resultPath` 选中 JSON object。
-- `exec` binding 只拦截匹配 `scriptBasename`、`writeSubcommand`、`resourceFlag` 和 `mutableFlags` 的命令。
-- `mutableFlags` 必须显式映射到 `ParameterCatalog.fieldId`；未知 flag 必须 fail closed。
+- `exec` binding 只拦截匹配 `scriptBasename`、`writeSubcommand`、`resourceFlag` 和 schema/`mutableFlags` 的命令。
+- `mutableFlags` 必须映射到 schema `fieldId`；未知 flag 必须 fail closed。
 - `shell` invocation 使用 `commandTokens` 模板并逐 token quote，不能拼接不可信 shell 字符串。
 - `verify` 省略时复用 `read`。
 - `compareNormalizer` 只用于写后验证比较，例如剥离 `version`、`updated_at`。
@@ -181,7 +181,7 @@ interface ProtectedMutationBinding {
 
 ```ts
 interface ResolvedPatchFieldChange {
-  // 被修改的字段 ID，必须来自 ParameterCatalog.fieldId。
+  // 被修改的字段 ID，必须来自冻结 field schema。
   fieldId: string;
 
   // 本字段的变更操作，例如 set 或 replace_item。
@@ -206,13 +206,13 @@ interface DiffItem {
   // 被展示的字段 ID，必须对应本次 resolvedPatch 里的字段。
   fieldId: string;
 
-  // 展示名。通常取 ParameterCatalog.labels[0]。
+  // 展示名。通常取 fieldSchema.label。
   label: string;
 
-  // 写前值，从 beforeSnapshot 按 apiPath 取出。
+  // 写前值，从 beforeSnapshot 按 readPath 取出。
   before: unknown;
 
-  // 写后值，从 writePayload 按 apiPath 取出。
+  // 写后值，从 writePayload 按 readPath 取出。
   after: unknown;
 }
 
@@ -399,7 +399,7 @@ erDiagram
 - 一个 `approvalPrincipal` 可以有多个历史 plan，但文本无 planId 确认时只能在“唯一 pending plan”场景下自动选择。
 - 一个 `storeId` 可以有多个历史 plan，但同一时刻只允许一个不同 payload 的 active plan。
 - 相同 `storeId + writePayload` 的活跃 plan 应复用，避免重复发送多个等价确认。
-- `ResolvedPatch` 描述哪些 catalog 字段发生变化，`writePayload` 描述最终完整写入对象，两者都属于同一个 plan。
+- `ResolvedPatch` 描述哪些 field schema 字段发生变化，`writePayload` 描述最终完整写入对象，两者都属于同一个 plan。
 - `MutationResult` 只在执行或取消后出现，用于记录 write/verify/error 信息。
 
 ## 4. 状态机
@@ -504,19 +504,13 @@ payload 一致性校验：
 
 ### 6.1 registry 与 binding
 
-当前默认内置一条 binding：
-
-- `id`: `mock-full-reduction.exec`
-- `protectedToolName`: `mock-full-reduction-config`
-- `match.kind`: `exec`
-- `read.kind`: `shell`
-
-插件配置可通过 `protectedMutations` 覆盖内置 binding。每条 binding 都必须显式声明 `read`，这是批量接入几百个写 skill 的前提。
+当前默认不内置任何受保护 binding。插件配置必须通过 `protectedMutations` 显式声明受保护写路径；每条 binding 都必须显式声明 `fieldSchema` 和 `read`，这是批量接入几百个写 skill 的前提。
 
 要求：
 
 - `protectedToolName` 是规范化后的业务写工具名。
 - `match` 定义如何识别真实写入口。
+- `fieldSchema` 定义字段、类型、CLI flag、readPath 和展示信息。
 - `read` 定义如何读取当前状态。
 - `write` 对 direct tool binding 必填；exec binding 默认冻结原始 shell 写命令。
 - `verify` 可选，省略时复用 `read`。
@@ -536,15 +530,15 @@ direct tool binding 使用：
 
 ### 6.3 equivalent `exec`
 
-默认 mock binding 的识别范围：
+exec binding 的识别范围：
 
 - hook toolName 必须是 `exec`。
 - command 必须能被窄 shell tokenizer 切成 token。
 - 可选前缀：环境变量赋值。
 - 执行器必须长得像 `python`、`python3` 或带版本号的 python。
-- script basename 来自 binding，默认是 `mock_full_reduction_cli.py`。
-- 子命令必须是 binding 声明的 `writeSubcommand`，默认是 `write`；`readSubcommand` 不拦截。
-- 支持 binding 声明的 `preSubcommandFlags`、`resourceFlag`、`ignoredWriteFlags` 和 `mutableFlags`。
+- script basename 来自 binding。
+- 子命令必须是 binding 声明的 `writeSubcommand`；`readSubcommand` 不拦截。
+- 支持 binding 声明的 `preSubcommandFlags`、`resourceFlag`、`ignoredWriteFlags`、`mutableFlags` 和 `mutableFlagsFromSchema`。
 
 实现要点：
 
@@ -553,7 +547,7 @@ direct tool binding 使用：
 - 生成 shell read invocation 时要逐 token quote。
 - 写前通过 `readSnapshotFromExecutionContext` 读取 beforeSnapshot。
 - `ResolvedPatch` 由 CLI flag 转成 fieldChanges。
-- `payload` 由 `buildWritePayload(beforeSnapshot, resolvedPatch, parameterCatalog)` 构造。
+- `payload` 由 `buildWritePayload(beforeSnapshot, resolvedPatch, fieldSchema)` 构造。
 
 安全边界：
 
@@ -567,28 +561,20 @@ direct tool binding 使用：
 
 位置：`src/protected-write-plan.ts`
 
-`ensureProtectedWritePlan` 用 catalog 遍历所有字段：
+`ensureProtectedWritePlan` 用冻结 field schema 遍历所有字段：
 
-1. 从 `beforeSnapshot` 和 `writePayload` 的 `apiPath` 取值。
+1. 从 `beforeSnapshot` 和 `writePayload` 的 `readPath` 取值。
 2. 用规范化 JSON 比较判断字段是否变化。
-3. after 值为 `undefined` 时抛错，因为受保护 payload 缺必要字段。
-4. 没有任何 catalog 字段变化时抛错。
-5. `full_reduction_tiers` 变化时删除 tier scalar field 的重复变化，避免一个业务变更展示成多个内部字段。
+3. required 字段 after 值为 `undefined` 时抛错，因为受保护 payload 缺必要字段。
+4. 如果 `writePayload` 新增、删除或修改 schema 外字段，直接抛错，确保未知字段 fail closed。
+5. 没有任何 schema 字段变化时抛错。
+6. 核心不再合并业务派生字段；需要派生字段行为时由业务 schema、normalizer 或 transformer 处理。
 
-### 7.2 tier 双视图同步
+### 7.2 payload 合成
 
 位置：`src/payload-builder.ts`
 
-当前样例同时存在：
-
-- 业务 list 视图：`promotion.full_reduction_tiers`
-- CLI scalar 视图：`tier_1_threshold`、`tier_1_discount` 等
-
-同步规则：
-
-- 如果修改 `full_reduction_tiers`，且 snapshot 里有 scalar 字段，则把 list 同步回 scalar 字段。
-- 如果修改 scalar 字段，则用 scalar 字段重建 `promotion.full_reduction_tiers`。
-- 这样 direct payload、exec payload、read/verify snapshot 才能稳定比较。
+patch 型写入口会从当前 snapshot 克隆一份完整 payload，再按每个 field schema 的 `readPath` 写入变更值。核心不再包含 mock 满减 tier 的双视图同步逻辑；这类业务派生关系应在示例 skill 的读写契约、normalizer 或后续 transformer 中处理。
 
 ### 7.3 Hash 规范化
 
@@ -688,14 +674,14 @@ channel:accountId:senderId
 
 现有测试按层验证以下能力：
 
-- `test/unit/core-invariants.test.ts`：状态集合、catalog、hash、终态不可回跳、按 principal 查 pending。
+- `test/unit/core-invariants.test.ts`：状态集合、hash、终态不可回跳、按 principal 查 pending。
 - `test/unit/protected-write-request.test.ts`：exec 写命令规范化、相对路径和 workdir、payload 构造。
 - `src/mutation-registry.ts` 当前通过 protected-write-request 和 tool-backed integration 间接覆盖；后续增加多 binding 时应补独立单元测试。
 - `test/unit/protected-write-plan.test.ts`：从真实 payload 创建 plan、相同 payload 复用、同店不同 active plan 阻断。
 - `test/unit/approval-principal.test.ts`：senderId 和 principal 规范化。
 - `test/unit/text-plan-actions.test.ts`：文本确认/取消解析，不接受旧 slash command。
 - `test/seams/before-tool-call.test.ts`：unrelated exec 放行、裸写阻断、缺 binding 阻断、payload 不一致阻断、完全一致放行。
-- `test/integration/workflow.test.ts`：成功、冲突、回读失败、幂等、字段目录、tier 同步、跨 session approve/cancel、不同 principal 拒绝。
+- `test/integration/workflow.test.ts`：成功、冲突、回读失败、幂等、字段 schema、普通 schema 字段、跨 session approve/cancel、不同 principal 拒绝。
 - `test/integration/tool-backed-workflow.test.ts`：真实 mock CLI read/write/verify 闭环。
 
 重写时至少要保留这些测试语义。如果继续演进，应该补入口层 seam test 覆盖“确认消息已直接发送后，`blockReason` 能约束普通 assistant final 的推荐回复语义，并且同一 run 不重复发送确认单”的场景。
@@ -722,10 +708,10 @@ channel:accountId:senderId
 
 ## 12. 新增一个受保护写工具的最低步骤
 
-1. 增加一条 `protectedMutations` binding，声明 `id`、`protectedToolName`、`match`、`read`。
-2. 对 patch 型写入口，配置 `mutableFlags` 到 `ParameterCatalog.fieldId` 的映射。
+1. 增加一条 `protectedMutations` binding，声明 `id`、`protectedToolName`、`match`、`fieldSchema`、`read`。
+2. 对 patch 型写入口，配置 `mutableFlagsFromSchema` 或 `mutableFlags` 到 `fieldId` 的映射。
 3. 对 direct tool 且需要文本 ACK 直接执行的场景，显式配置 `write` invocation。
-4. 为该工具补充 catalog 字段或独立 catalog，确保所有可写字段有稳定 `fieldId` 和 `apiPath`。
+4. 为该工具补充字段 schema，确保所有可写字段有稳定 `fieldId` 和 `readPath`。
 5. 必要时配置 `resultPath`、`normalizer`、`compareNormalizer`。
 6. 保证 `ensureProtectedWritePlan` 能从 before/after 推导出至少一个字段变化。
 7. 补齐 guard seam tests：裸写阻断、缺 binding 阻断、错误 plan 阻断、payload drift 阻断、完全一致放行。

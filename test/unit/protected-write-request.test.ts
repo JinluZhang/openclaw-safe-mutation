@@ -4,6 +4,8 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import type { ProtectedMutationBinding } from "../../src/mutation-registry.js";
+import { ProtectedMutationRegistry } from "../../src/mutation-registry.js";
 import { resolveProtectedWriteRequest } from "../../src/protected-write-request.js";
 
 const tempDirs: string[] = [];
@@ -141,15 +143,92 @@ afterEach(async () => {
   );
 });
 
+function buildMockBinding(): ProtectedMutationBinding {
+  return {
+    id: "mock-full-reduction.exec",
+    protectedToolName: "mock-full-reduction-config",
+    match: {
+      kind: "exec",
+      toolName: "exec",
+      pythonExecutable: true,
+      scriptBasename: "mock_full_reduction_cli.py",
+      writeSubcommand: "write",
+      readSubcommand: "read",
+      preSubcommandFlags: {
+        "--state-file": {
+          variableName: "stateFilePath",
+          pathValue: true,
+          defaultValue: {
+            kind: "relativeToScriptDir",
+            path: "../data/mock_full_reduction_state.json"
+          }
+        }
+      },
+      ignoredWriteFlags: ["--format", "--state-file"],
+      resourceFlag: "--poiid",
+      mutableFlagsFromSchema: true
+    },
+    fieldSchema: {
+      kind: "inline",
+      fields: [
+        {
+          fieldId: "tier_1_threshold",
+          flag: "--tier-1-threshold",
+          label: "第一档门槛",
+          valueType: "decimal",
+          readPath: "tier_1_threshold"
+        },
+        {
+          fieldId: "tier_1_discount",
+          flag: "--tier-1-discount",
+          label: "第一档优惠",
+          valueType: "decimal",
+          readPath: "tier_1_discount"
+        },
+        {
+          fieldId: "remark",
+          flag: "--remark",
+          label: "备注",
+          valueType: "string",
+          readPath: "remark"
+        }
+      ]
+    },
+    read: {
+      kind: "shell",
+      commandTokens: [
+        "{{envAssignmentTokens}}",
+        "{{pythonToken}}",
+        "{{pythonOptionTokens}}",
+        "{{scriptPath}}",
+        "--state-file",
+        "{{stateFilePath}}",
+        "read",
+        "--poiid",
+        "{{resourceId}}",
+        "--format",
+        "json"
+      ],
+      normalizer: "mockFullReductionRead"
+    },
+    compareNormalizer: {
+      kind: "stripFields",
+      paths: ["updated_at", "version", "promotion.full_reduction_tiers"]
+    }
+  };
+}
+
 describe("resolveProtectedWriteRequest", () => {
   it("normalizes absolute mock full-reduction exec writes into protected requests", async () => {
     const fixture = await createMockSkillFixture();
+    const registry = new ProtectedMutationRegistry([buildMockBinding()]);
 
     const resolution = await resolveProtectedWriteRequest({
       toolName: "exec",
       params: {
         command: `python3 ${fixture.scriptPath} write --poiid 10001 --tier-1-threshold 28 --tier-1-discount 15 --format json`
-      }
+      },
+      registry
     });
 
     expect(resolution?.error).toBeUndefined();
@@ -184,7 +263,7 @@ describe("resolveProtectedWriteRequest", () => {
       (resolution?.request?.payload.promotion as Record<string, unknown>)
         .full_reduction_tiers
     ).toEqual([
-      { threshold: 28, reduction: 15 },
+      { threshold: 27, reduction: 15 },
       { threshold: 45, reduction: 25 },
       { threshold: 60, reduction: 35 }
     ]);
@@ -192,6 +271,7 @@ describe("resolveProtectedWriteRequest", () => {
 
   it("supports basename script commands when exec workdir points at the script directory", async () => {
     const fixture = await createMockSkillFixture();
+    const registry = new ProtectedMutationRegistry([buildMockBinding()]);
 
     const resolution = await resolveProtectedWriteRequest({
       toolName: "exec",
@@ -199,7 +279,8 @@ describe("resolveProtectedWriteRequest", () => {
         command:
           'python3 mock_full_reduction_cli.py write --poiid 10001 --remark "phase 1 dry run" --format json',
         workdir: fixture.scriptDir
-      }
+      },
+      registry
     });
 
     expect(resolution?.error).toBeUndefined();

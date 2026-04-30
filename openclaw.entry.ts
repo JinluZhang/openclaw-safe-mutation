@@ -30,12 +30,12 @@ const pluginConfigJsonSchema = {
   properties: {
     dataDir: {
       type: "string",
-      description: "Directory for fake store snapshots and mutation plans"
+      description: "Directory for safe-mutation plan state"
     },
     protectedMutations: {
       type: "array",
       description:
-        "Explicit protected mutation bindings. Each binding must declare the write matcher and read invocation; omitted uses built-in mock binding.",
+        "Explicit protected mutation bindings. Each binding must declare write matching, field schema, and read invocation.",
       items: {
         type: "object",
         additionalProperties: true
@@ -315,6 +315,12 @@ export default definePluginEntry({
                 {
                   storeId,
                   writePayload: payload,
+                  fieldSchema:
+                    decision.protectedWriteRequest.fieldSchema,
+                  fieldSchemaHash:
+                    decision.protectedWriteRequest.fieldSchemaHash,
+                  bindingSnapshot:
+                    decision.protectedWriteRequest.bindingSnapshot,
                   beforeSnapshot: decision.protectedWriteRequest.beforeSnapshot,
                   executionContext:
                     decision.protectedWriteRequest.executionContext,

@@ -6,6 +6,10 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { buildApprovalPrincipal } from "../../src/approval-principal.js";
 import { runMutateApproveCommand } from "../../src/commands/mutate-approve.js";
+import {
+  ProtectedMutationRegistry,
+  type ProtectedMutationBinding
+} from "../../src/mutation-registry.js";
 import { ensureProtectedWritePlan } from "../../src/protected-write-plan.js";
 import { resolveProtectedWriteRequest } from "../../src/protected-write-request.js";
 import {
@@ -16,6 +20,72 @@ import {
 import { InMemoryMutationPlanStore } from "../helpers/in-memory-plan-store.js";
 
 const tempDirs: string[] = [];
+
+function buildMockBinding(): ProtectedMutationBinding {
+  return {
+    id: "mock-full-reduction.exec",
+    protectedToolName: "mock-full-reduction-config",
+    match: {
+      kind: "exec",
+      toolName: "exec",
+      pythonExecutable: true,
+      scriptBasename: "mock_full_reduction_cli.py",
+      writeSubcommand: "write",
+      readSubcommand: "read",
+      preSubcommandFlags: {
+        "--state-file": {
+          variableName: "stateFilePath",
+          pathValue: true,
+          defaultValue: {
+            kind: "relativeToScriptDir",
+            path: "../data/mock_full_reduction_state.json"
+          }
+        }
+      },
+      ignoredWriteFlags: ["--format", "--state-file"],
+      resourceFlag: "--poiid",
+      mutableFlagsFromSchema: true
+    },
+    fieldSchema: {
+      kind: "inline",
+      fields: [
+        {
+          fieldId: "tier_1_discount",
+          flag: "--tier-1-discount",
+          label: "第一档优惠",
+          valueType: "decimal",
+          readPath: "tier_1_discount"
+        }
+      ]
+    },
+    read: {
+      kind: "shell",
+      commandTokens: [
+        "{{envAssignmentTokens}}",
+        "{{pythonToken}}",
+        "{{pythonOptionTokens}}",
+        "{{scriptPath}}",
+        "--state-file",
+        "{{stateFilePath}}",
+        "read",
+        "--poiid",
+        "{{resourceId}}",
+        "--format",
+        "json"
+      ],
+      normalizer: "mockFullReductionRead"
+    },
+    compareNormalizer: {
+      kind: "stripFields",
+      paths: [
+        "version",
+        "updated_at",
+        "promotion.full_reduction_tiers",
+        "full_reduction_tiers"
+      ]
+    }
+  };
+}
 
 async function createMockSkillFixture(): Promise<{
   rootDir: string;
@@ -160,11 +230,13 @@ describe("tool-backed workflow", () => {
     const readAdapter = new ToolReadAdapter();
     const verifyAdapter = new ToolVerifyAdapter();
     const writeAdapter = new ToolWriteAdapter();
+    const registry = new ProtectedMutationRegistry([buildMockBinding()]);
     const resolution = await resolveProtectedWriteRequest({
       toolName: "exec",
       params: {
         command: `python3 ${fixture.scriptPath} --state-file ${fixture.stateFilePath} write --poiid 10001 --tier-1-discount 14 --format json`
-      }
+      },
+      registry
     });
 
     expect(resolution?.error).toBeUndefined();
@@ -181,6 +253,8 @@ describe("tool-backed workflow", () => {
       {
         storeId: "10001",
         writePayload: resolution?.request?.payload ?? {},
+        fieldSchema: resolution?.request?.fieldSchema ?? [],
+        fieldSchemaHash: resolution?.request?.fieldSchemaHash,
         executionContext: resolution?.request?.executionContext,
         requestedBy: "alice",
         approvalChannel: "feishu",

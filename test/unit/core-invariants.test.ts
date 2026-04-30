@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 
-import { parameterCatalog } from "../../src/catalog.js";
 import {
   ACTIVE_PLAN_STATUSES,
   TERMINAL_PLAN_STATUSES,
@@ -11,6 +10,7 @@ import {
   normalizeSnapshot
 } from "../../src/snapshot-normalizer.js";
 import { InMemoryMutationPlanStore } from "../helpers/in-memory-plan-store.js";
+import { shopFieldSchema } from "../helpers/generic-schema.js";
 
 const baseSnapshot = {
   promotion: {
@@ -54,6 +54,8 @@ function buildPlan(status: MutationPlan["status"]): MutationPlan {
       }
     },
     diffItems: [],
+    fieldSchemaSnapshot: shopFieldSchema,
+    fieldSchemaHash: "schema-hash",
     requestedBy: "alice",
     createdAtMs: 1,
     expiresAtMs: 1000,
@@ -70,23 +72,13 @@ describe("core invariants", () => {
     ]);
   });
 
-  it("covers the mock full-reduction writable field catalog", () => {
-    expect(parameterCatalog).toEqual(
+  it("keeps writable fields scoped to a protected mutation schema", () => {
+    expect(shopFieldSchema).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          fieldId: "full_reduction_tiers",
-          apiPath: "promotion.full_reduction_tiers",
-          valueType: "tier-list"
-        }),
-        expect.objectContaining({
-          fieldId: "activity_name",
-          apiPath: "activity_name",
+          fieldId: "shop_name",
+          readPath: "shop.name",
           valueType: "string"
-        }),
-        expect.objectContaining({
-          fieldId: "budget_limit",
-          apiPath: "budget_limit",
-          valueType: "decimal"
         })
       ])
     );

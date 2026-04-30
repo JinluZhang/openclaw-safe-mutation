@@ -1,11 +1,17 @@
 import path from "node:path";
+import { spawn } from "node:child_process";
 
-import { parameterCatalog } from "./catalog.js";
+import {
+  hashFieldSchema,
+  type FieldSchemaSource,
+  type ProtectedFieldDefinition,
+  validateFieldSchema
+} from "./field-schema.js";
 import type {
   MutationExecutionContext,
   MutationInvocation,
   ResolvedPatch,
-  SnapshotNormalizerId
+  SnapshotNormalizer
 } from "./intent-types.js";
 import { getValueAtPath } from "./object-path.js";
 
@@ -16,7 +22,7 @@ export interface ShellInvocationTemplate {
   commandTokens: readonly string[];
   workdir?: string;
   resultPath?: string;
-  normalizer?: SnapshotNormalizerId;
+  normalizer?: SnapshotNormalizer;
 }
 
 export interface HttpInvocationTemplate {
@@ -26,7 +32,7 @@ export interface HttpInvocationTemplate {
   headers?: Record<string, string>;
   body?: string;
   resultPath?: string;
-  normalizer?: SnapshotNormalizerId;
+  normalizer?: SnapshotNormalizer;
 }
 
 export type MutationInvocationTemplate =
@@ -58,7 +64,8 @@ export interface ExecCommandMutationMatch {
   preSubcommandFlags?: Record<string, ExecPreSubcommandFlagBinding>;
   ignoredWriteFlags?: readonly string[];
   resourceFlag: string;
-  mutableFlags: Record<string, string | ExecFlagBinding>;
+  mutableFlags?: Record<string, string | ExecFlagBinding>;
+  mutableFlagsFromSchema?: boolean;
 }
 
 export interface ToolPayloadMutationMatch {
@@ -73,15 +80,18 @@ export interface ProtectedMutationBinding {
   id: string;
   protectedToolName: string;
   match: ExecCommandMutationMatch | ToolPayloadMutationMatch;
+  fieldSchema: FieldSchemaSource;
   read: MutationInvocationTemplate;
   write?: MutationInvocationTemplate;
   verify?: MutationInvocationTemplate;
-  compareNormalizer?: SnapshotNormalizerId;
+  compareNormalizer?: SnapshotNormalizer;
 }
 
 export interface MatchedProtectedMutation {
   binding: ProtectedMutationBinding;
   resourceId: string;
+  fieldSchema: ProtectedFieldDefinition[];
+  fieldSchemaHash: string;
   fieldChanges?: ResolvedPatch["fieldChanges"];
   payload?: Record<string, unknown>;
   executionContext: MutationExecutionContext;
@@ -201,14 +211,11 @@ function parseBoolean(rawValue: string): boolean {
   );
 }
 
-export function parseFieldValue(fieldId: string, rawValue: string): unknown {
-  const catalogItem = parameterCatalog.find((item) => item.fieldId === fieldId);
-
-  if (!catalogItem) {
-    throw new Error(`Unsupported protected write field ${fieldId}.`);
-  }
-
-  switch (catalogItem.valueType) {
+export function parseFieldValue(
+  field: ProtectedFieldDefinition,
+  rawValue: string
+): unknown {
+  switch (field.valueType) {
     case "boolean":
       return parseBoolean(rawValue);
     case "integer": {
@@ -216,7 +223,7 @@ export function parseFieldValue(fieldId: string, rawValue: string): unknown {
 
       if (!Number.isSafeInteger(parsed)) {
         throw new Error(
-          `Unsupported integer value "${rawValue}" for field ${fieldId}.`
+          `Unsupported integer value "${rawValue}" for field ${field.fieldId}.`
         );
       }
 
@@ -227,19 +234,35 @@ export function parseFieldValue(fieldId: string, rawValue: string): unknown {
 
       if (!Number.isFinite(parsed)) {
         throw new Error(
-          `Unsupported decimal value "${rawValue}" for field ${fieldId}.`
+          `Unsupported decimal value "${rawValue}" for field ${field.fieldId}.`
         );
       }
 
       return parsed;
     }
     case "enum":
+      if (field.enumValues && !field.enumValues.includes(rawValue)) {
+        throw new Error(
+          `Unsupported enum value "${rawValue}" for field ${field.fieldId}.`
+        );
+      }
+      return rawValue;
     case "string":
     case "datetime":
       return rawValue;
+    case "json":
+      try {
+        return JSON.parse(rawValue);
+      } catch (error) {
+        throw new Error(
+          `Unsupported JSON value for field ${field.fieldId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      }
     default:
       throw new Error(
-        `Protected exec interception does not support field type ${catalogItem.valueType} for ${fieldId}.`
+        `Protected exec interception does not support field type ${field.valueType} for ${field.fieldId}.`
       );
   }
 }
@@ -342,6 +365,179 @@ export function renderInvocationTemplate(
   };
 }
 
+interface SchemaCommandResult {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+const schemaCache = new Map<
+  string,
+  {
+    expiresAtMs: number;
+    fields: ProtectedFieldDefinition[];
+  }
+>();
+
+async function runSchemaShellCommand(params: {
+  commandTokens: readonly string[];
+  variables: ReadonlyMap<string, TemplateValue>;
+}): Promise<SchemaCommandResult> {
+  const command = buildShellCommand(
+    renderTemplateTokens(params.commandTokens, params.variables)
+  );
+
+  return new Promise((resolve, reject) => {
+    const child = spawn("/bin/sh", ["-lc", command], {
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (exitCode) => {
+      resolve({
+        exitCode: exitCode ?? 1,
+        stdout,
+        stderr
+      });
+    });
+  });
+}
+
+function selectSchemaFields(
+  parsed: unknown,
+  resultPath: string | undefined
+): unknown {
+  if (!resultPath) {
+    if (isRecord(parsed) && Array.isArray(parsed.fields)) {
+      return parsed.fields;
+    }
+
+    return parsed;
+  }
+
+  return getValueAtPath(isRecord(parsed) ? parsed : {}, resultPath);
+}
+
+async function resolveFieldSchema(params: {
+  binding: ProtectedMutationBinding;
+  variables: ReadonlyMap<string, TemplateValue>;
+}): Promise<{
+  fields: ProtectedFieldDefinition[];
+  hash: string;
+}> {
+  const source = params.binding.fieldSchema;
+  const cacheKey =
+    source.kind === "inline"
+      ? JSON.stringify(source)
+      : source.kind === "shell"
+        ? JSON.stringify({
+            kind: source.kind,
+            commandTokens: renderTemplateTokens(
+              source.commandTokens,
+              params.variables
+            ),
+            resultPath: source.resultPath
+          })
+        : JSON.stringify({
+            kind: source.kind,
+            url: renderTemplateString(source.url, params.variables),
+            method: source.method,
+            headers: Object.fromEntries(
+              Object.entries(source.headers ?? {}).map(([key, value]) => [
+                key,
+                renderTemplateString(value, params.variables)
+              ])
+            ),
+            body: source.body
+              ? renderTemplateString(source.body, params.variables)
+              : undefined,
+            resultPath: source.resultPath
+          });
+  const now = Date.now();
+  const cached = schemaCache.get(cacheKey);
+
+  if (cached && cached.expiresAtMs > now) {
+    return {
+      fields: structuredClone(cached.fields),
+      hash: hashFieldSchema(cached.fields)
+    };
+  }
+
+  let rawFields: unknown;
+
+  if (source.kind === "inline") {
+    rawFields = source.fields;
+  } else if (source.kind === "shell") {
+    const result = await runSchemaShellCommand({
+      commandTokens: source.commandTokens,
+      variables: params.variables
+    });
+
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `Protected write binding ${params.binding.id} schema discovery failed: ${
+          result.stderr.trim() || `Command exited with code ${result.exitCode}`
+        }`
+      );
+    }
+
+    rawFields = selectSchemaFields(JSON.parse(result.stdout), source.resultPath);
+  } else {
+    const response = await fetch(
+      renderTemplateString(source.url, params.variables),
+      {
+        method: source.method ?? "GET",
+        headers: Object.fromEntries(
+          Object.entries(source.headers ?? {}).map(([key, value]) => [
+            key,
+            renderTemplateString(value, params.variables)
+          ])
+        ),
+        body: source.body
+          ? renderTemplateString(source.body, params.variables)
+          : undefined
+      }
+    );
+    const responseText = await response.text();
+
+    if (!response.ok) {
+      throw new Error(
+        `Protected write binding ${params.binding.id} schema discovery failed: ${response.status} ${response.statusText}`
+      );
+    }
+
+    rawFields = selectSchemaFields(JSON.parse(responseText), source.resultPath);
+  }
+
+  const fields = validateFieldSchema(
+    rawFields,
+    `protected mutation binding ${params.binding.id} fieldSchema`
+  );
+
+  if (source.kind !== "inline" && source.cacheTtlMs && source.cacheTtlMs > 0) {
+    schemaCache.set(cacheKey, {
+      expiresAtMs: now + source.cacheTtlMs,
+      fields: structuredClone(fields)
+    });
+  }
+
+  return {
+    fields,
+    hash: hashFieldSchema(fields)
+  };
+}
+
 function resolveDefaultPreSubcommandFlagValue(params: {
   spec: ExecPreSubcommandFlagBinding;
   scriptDir: string;
@@ -361,14 +557,14 @@ function resolveDefaultPreSubcommandFlagValue(params: {
   return;
 }
 
-function matchExecBinding(
+async function matchExecBinding(
   binding: ProtectedMutationBinding,
   input: {
     command: string;
     workdir?: string;
     approvedPlanId?: string;
   }
-): ExecMatchResult | undefined {
+): Promise<ExecMatchResult | undefined> {
   if (binding.match.kind !== "exec") {
     return;
   }
@@ -508,6 +704,27 @@ function matchExecBinding(
     }
   }
 
+  const resolvedSchema = await resolveFieldSchema({
+    binding,
+    variables
+  });
+  const fieldsById = new Map(
+    resolvedSchema.fields.map((field) => [field.fieldId, field] as const)
+  );
+  const mutableFlags = {
+    ...(binding.match.mutableFlags ?? {})
+  };
+
+  if (binding.match.mutableFlagsFromSchema) {
+    for (const field of resolvedSchema.fields) {
+      if (field.flag) {
+        mutableFlags[field.flag] = {
+          fieldId: field.fieldId
+        };
+      }
+    }
+  }
+
   let resourceId: string | undefined;
   const fieldChanges: ResolvedPatch["fieldChanges"] = [];
 
@@ -541,7 +758,7 @@ function matchExecBinding(
       continue;
     }
 
-    const flagBinding = binding.match.mutableFlags[flag];
+    const flagBinding = mutableFlags[flag];
 
     if (!flagBinding) {
       return {
@@ -559,10 +776,18 @@ function matchExecBinding(
 
     const fieldId =
       typeof flagBinding === "string" ? flagBinding : flagBinding.fieldId;
+    const field = fieldsById.get(fieldId);
+
+    if (!field) {
+      return {
+        error: `Protected write binding ${binding.id} references unknown schema field ${fieldId}.`
+      };
+    }
+
     fieldChanges.push({
       fieldId,
       operation: "set",
-      normalizedInput: parseFieldValue(fieldId, rawValue)
+      normalizedInput: parseFieldValue(field, rawValue)
     });
     cursor += inlineValue !== undefined ? 1 : 2;
   }
@@ -605,6 +830,8 @@ function matchExecBinding(
     matched: {
       binding,
       resourceId,
+      fieldSchema: structuredClone(resolvedSchema.fields),
+      fieldSchemaHash: resolvedSchema.hash,
       fieldChanges,
       executionContext,
       approvedPlanId: input.approvedPlanId,
@@ -613,13 +840,13 @@ function matchExecBinding(
   };
 }
 
-function matchToolBinding(
+async function matchToolBinding(
   binding: ProtectedMutationBinding,
   input: {
     params: Record<string, unknown>;
     approvedPlanId?: string;
   }
-): MatchedProtectedMutation | undefined {
+): Promise<MatchedProtectedMutation | undefined> {
   if (binding.match.kind !== "tool") {
     return;
   }
@@ -645,6 +872,10 @@ function matchToolBinding(
       variables.set(`param:${key}`, String(value));
     }
   }
+  const resolvedSchema = await resolveFieldSchema({
+    binding,
+    variables
+  });
   const readInvocation = renderInvocationTemplate(binding.read, variables);
   const verifyInvocation = binding.verify
     ? renderInvocationTemplate(binding.verify, variables)
@@ -659,6 +890,8 @@ function matchToolBinding(
   return {
     binding,
     resourceId: resourceValue,
+    fieldSchema: structuredClone(resolvedSchema.fields),
+    fieldSchemaHash: resolvedSchema.hash,
     payload: structuredClone(payloadValue),
     executionContext: {
       kind: "configured_mutation",
@@ -696,14 +929,14 @@ export class ProtectedMutationRegistry {
     return this.bindings.filter((binding) => binding.match.toolName === toolName);
   }
 
-  match(input: {
+  async match(input: {
     toolName: string;
     params: Record<string, unknown>;
     approvedPlanId?: string;
-  }): {
+  }): Promise<{
     matched?: MatchedProtectedMutation;
     error?: string;
-  } {
+  }> {
     for (const binding of this.getCandidateBindings(input.toolName)) {
       if (binding.match.kind === "exec") {
         const command = getString(input.params.command);
@@ -712,11 +945,19 @@ export class ProtectedMutationRegistry {
           continue;
         }
 
-        const result = matchExecBinding(binding, {
-          command,
-          workdir: getString(input.params.workdir),
-          approvedPlanId: input.approvedPlanId
-        });
+        let result: ExecMatchResult | undefined;
+
+        try {
+          result = await matchExecBinding(binding, {
+            command,
+            workdir: getString(input.params.workdir),
+            approvedPlanId: input.approvedPlanId
+          });
+        } catch (error) {
+          return {
+            error: error instanceof Error ? error.message : String(error)
+          };
+        }
 
         if (result?.error || result?.matched) {
           return result;
@@ -726,7 +967,7 @@ export class ProtectedMutationRegistry {
       }
 
       try {
-        const matched = matchToolBinding(binding, {
+        const matched = await matchToolBinding(binding, {
           params: input.params,
           approvedPlanId: input.approvedPlanId
         });
@@ -747,58 +988,7 @@ export class ProtectedMutationRegistry {
   }
 }
 
-export const defaultProtectedMutationBindings: readonly ProtectedMutationBinding[] = [
-  {
-    id: "mock-full-reduction.exec",
-    protectedToolName: "mock-full-reduction-config",
-    match: {
-      kind: "exec",
-      toolName: "exec",
-      pythonExecutable: true,
-      scriptBasename: "mock_full_reduction_cli.py",
-      writeSubcommand: "write",
-      readSubcommand: "read",
-      preSubcommandFlags: {
-        "--state-file": {
-          variableName: "stateFilePath",
-          pathValue: true,
-          defaultValue: {
-            kind: "relativeToScriptDir",
-            path: "../data/mock_full_reduction_state.json"
-          }
-        }
-      },
-      ignoredWriteFlags: ["--format", "--state-file"],
-      resourceFlag: "--poiid",
-      mutableFlags: Object.fromEntries(
-        parameterCatalog
-          .filter((item) => item.fieldId !== "full_reduction_tiers")
-          .map((item) => [
-            `--${item.fieldId.replaceAll("_", "-")}`,
-            item.fieldId
-          ])
-      )
-    },
-    read: {
-      kind: "shell",
-      commandTokens: [
-        "{{envAssignmentTokens}}",
-        "{{pythonToken}}",
-        "{{pythonOptionTokens}}",
-        "{{scriptPath}}",
-        "--state-file",
-        "{{stateFilePath}}",
-        "read",
-        "--poiid",
-        "{{resourceId}}",
-        "--format",
-        "json"
-      ],
-      normalizer: "mockFullReductionRead"
-    },
-    compareNormalizer: "stripVolatileFields"
-  }
-];
+export const defaultProtectedMutationBindings: readonly ProtectedMutationBinding[] = [];
 
 function looksLikeProtectedMutationBinding(
   value: unknown
@@ -811,15 +1001,14 @@ function looksLikeProtectedMutationBinding(
     typeof value.id === "string" &&
     typeof value.protectedToolName === "string" &&
     (value.match.kind === "exec" || value.match.kind === "tool") &&
+    isRecord(value.fieldSchema) &&
     isRecord(value.read)
   );
 }
 
-export function loadProtectedMutationRegistry(
-  rawBindings: unknown
-): ProtectedMutationRegistry {
+export function loadProtectedMutationRegistry(rawBindings: unknown): ProtectedMutationRegistry {
   if (rawBindings === undefined) {
-    return new ProtectedMutationRegistry(defaultProtectedMutationBindings);
+    return new ProtectedMutationRegistry([]);
   }
 
   if (!Array.isArray(rawBindings)) {

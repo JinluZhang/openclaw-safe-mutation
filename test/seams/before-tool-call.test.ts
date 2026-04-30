@@ -4,7 +4,9 @@ import { buildApprovalPrincipal } from "../../src/approval-principal.js";
 import { buildDiffItems } from "../../src/diff.js";
 import { guardBeforeToolCall } from "../../src/hooks/before-tool-call.js";
 import type { MutationPlan } from "../../src/intent-types.js";
+import { ProtectedMutationRegistry } from "../../src/mutation-registry.js";
 import { InMemoryMutationPlanStore } from "../helpers/in-memory-plan-store.js";
+import { shopFieldSchema } from "../helpers/generic-schema.js";
 import {
   hashNormalizedSnapshot,
   normalizeSnapshot
@@ -52,6 +54,8 @@ async function resolveDirectProtectedWriteRequest({
       toolName: "mock-full-reduction-config",
       storeId: params.storeId,
       payload: structuredClone(params.payload),
+      fieldSchema: shopFieldSchema,
+      fieldSchemaHash: "schema-hash",
       approvedPlanId:
         typeof params.approvedPlanId === "string"
           ? params.approvedPlanId
@@ -85,7 +89,21 @@ function buildApprovedPlan(): MutationPlan {
     beforeHash: hashNormalizedSnapshot(normalizeSnapshot(beforeSnapshot)),
     resolvedPatch,
     writePayload,
-    diffItems: buildDiffItems(beforeSnapshot, writePayload, resolvedPatch),
+    diffItems: buildDiffItems(
+      beforeSnapshot,
+      writePayload,
+      resolvedPatch,
+      [
+        {
+          fieldId: "full_reduction_tiers",
+          label: "满减档位",
+          valueType: "json",
+          readPath: "promotion.full_reduction_tiers"
+        }
+      ]
+    ),
+    fieldSchemaSnapshot: shopFieldSchema,
+    fieldSchemaHash: "schema-hash",
     requestedBy: "alice",
     approvedBy: "alice",
     approvalPrincipal: buildApprovalPrincipal({
@@ -145,6 +163,8 @@ describe("OpenClaw before_tool_call guard", () => {
               toolName: "mock-full-reduction-config",
               storeId: "store-1",
               payload: writePayload,
+              fieldSchema: shopFieldSchema,
+              fieldSchemaHash: "schema-hash",
               source: "exec"
             }
           };
@@ -167,6 +187,8 @@ describe("OpenClaw before_tool_call guard", () => {
         toolName: "mock-full-reduction-config",
         storeId: "store-1",
         payload: writePayload,
+        fieldSchema: shopFieldSchema,
+        fieldSchemaHash: "schema-hash",
         source: "exec"
       }
     });
@@ -199,6 +221,8 @@ describe("OpenClaw before_tool_call guard", () => {
         toolName: "mock-full-reduction-config",
         storeId: "store-1",
         payload: writePayload,
+        fieldSchema: shopFieldSchema,
+        fieldSchemaHash: "schema-hash",
         approvedPlanId: undefined,
         source: "tool"
       }
@@ -211,6 +235,30 @@ describe("OpenClaw before_tool_call guard", () => {
     const decision = await guardBeforeToolCall(
       {
         planStore,
+        protectedMutationRegistry: new ProtectedMutationRegistry([
+          {
+            id: "direct-tool",
+            protectedToolName: "mock-full-reduction-config",
+            match: {
+              kind: "tool",
+              toolName: "mock-full-reduction-config",
+              resourceParamPath: "missingStoreId",
+              payloadParamPath: "payload"
+            },
+            fieldSchema: {
+              kind: "inline",
+              fields: shopFieldSchema
+            },
+            read: {
+              kind: "shell",
+              commandTokens: ["echo", "{}"]
+            },
+            write: {
+              kind: "shell",
+              commandTokens: ["echo", "{}"]
+            }
+          }
+        ]),
         now: () => 10
       },
       {
@@ -272,6 +320,8 @@ describe("OpenClaw before_tool_call guard", () => {
             ]
           }
         },
+        fieldSchema: shopFieldSchema,
+        fieldSchemaHash: "schema-hash",
         approvedPlanId: "plan-guard",
         source: "tool"
       }

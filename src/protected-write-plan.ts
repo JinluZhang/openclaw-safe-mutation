@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 
-import {
-  FULL_REDUCTION_TIER_SCALAR_FIELD_IDS,
-  parameterCatalog
-} from "./catalog.js";
 import type { ReadAdapter } from "./adapters/read-adapter.js";
 import { buildDiffItems } from "./diff.js";
+import {
+  getFieldLabel,
+  hashFieldSchema,
+  type ProtectedFieldDefinition
+} from "./field-schema.js";
 import type {
   MutationExecutionContext,
   MutationPlan,
@@ -48,14 +49,69 @@ function valuesExactlyEqual(left: unknown, right: unknown): boolean {
   return JSON.stringify(normalizeComparable(left)) === JSON.stringify(normalizeComparable(right));
 }
 
-function renderInterpretationText(resolvedPatch: ResolvedPatch): string {
-  const labels = resolvedPatch.fieldChanges.map((fieldChange) => {
-    const catalogItem = parameterCatalog.find(
-      (item) => item.fieldId === fieldChange.fieldId
-    );
+function collectLeafPaths(value: unknown, prefix = ""): string[] {
+  if (!isRecord(value)) {
+    return prefix ? [prefix] : [];
+  }
 
-    return catalogItem
-      ? `${catalogItem.labels[0]}(${fieldChange.fieldId})`
+  const entries = Object.entries(value);
+
+  if (entries.length === 0) {
+    return prefix ? [prefix] : [];
+  }
+
+  return entries.flatMap(([key, child]) =>
+    collectLeafPaths(child, prefix ? `${prefix}.${key}` : key)
+  );
+}
+
+function schemaCoversPath(
+  path: string,
+  fieldSchema: readonly ProtectedFieldDefinition[]
+): boolean {
+  return fieldSchema.some(
+    (field) => path === field.readPath || path.startsWith(`${field.readPath}.`)
+  );
+}
+
+function assertNoUnknownFieldChanges(
+  beforeSnapshot: Record<string, unknown>,
+  writePayload: Record<string, unknown>,
+  fieldSchema: readonly ProtectedFieldDefinition[]
+): void {
+  const candidatePaths = new Set([
+    ...collectLeafPaths(beforeSnapshot),
+    ...collectLeafPaths(writePayload)
+  ]);
+
+  for (const path of candidatePaths) {
+    if (schemaCoversPath(path, fieldSchema)) {
+      continue;
+    }
+
+    const beforeValue = getValueAtPath(beforeSnapshot, path);
+    const afterValue = getValueAtPath(writePayload, path);
+
+    if (!valuesExactlyEqual(beforeValue, afterValue)) {
+      throw new Error(
+        `Protected write payload changes unknown schema field at path ${path}.`
+      );
+    }
+  }
+}
+
+function renderInterpretationText(
+  resolvedPatch: ResolvedPatch,
+  fieldSchema: readonly ProtectedFieldDefinition[]
+): string {
+  const fieldsById = new Map(
+    fieldSchema.map((field) => [field.fieldId, field] as const)
+  );
+  const labels = resolvedPatch.fieldChanges.map((fieldChange) => {
+    const field = fieldsById.get(fieldChange.fieldId);
+
+    return field
+      ? `${getFieldLabel(field)}(${fieldChange.fieldId})`
       : fieldChange.fieldId;
   });
 
@@ -65,47 +121,46 @@ function renderInterpretationText(resolvedPatch: ResolvedPatch): string {
 function buildResolvedPatchFromWritePayload(
   storeId: string,
   beforeSnapshot: Record<string, unknown>,
-  writePayload: Record<string, unknown>
+  writePayload: Record<string, unknown>,
+  fieldSchema: readonly ProtectedFieldDefinition[]
 ): ResolvedPatch {
+  assertNoUnknownFieldChanges(beforeSnapshot, writePayload, fieldSchema);
+
   const changedFieldIds = new Set<string>();
 
-  for (const catalogItem of parameterCatalog) {
-    const beforeValue = getValueAtPath(beforeSnapshot, catalogItem.apiPath);
-    const afterValue = getValueAtPath(writePayload, catalogItem.apiPath);
+  for (const field of fieldSchema) {
+    const beforeValue = getValueAtPath(beforeSnapshot, field.readPath);
+    const afterValue = getValueAtPath(writePayload, field.readPath);
 
     if (valuesExactlyEqual(beforeValue, afterValue)) {
       continue;
     }
 
-    if (afterValue === undefined) {
+    if (field.requiredInPayload && afterValue === undefined) {
       throw new Error(
-        `Protected write payload is missing required field ${catalogItem.fieldId}.`
+        `Protected write payload is missing required field ${field.fieldId}.`
       );
     }
 
-    changedFieldIds.add(catalogItem.fieldId);
-  }
-
-  if (changedFieldIds.has("full_reduction_tiers")) {
-    for (const fieldId of FULL_REDUCTION_TIER_SCALAR_FIELD_IDS) {
-      changedFieldIds.delete(fieldId);
+    if (afterValue !== undefined) {
+      changedFieldIds.add(field.fieldId);
     }
   }
 
-  const fieldChanges = parameterCatalog
-    .filter((catalogItem) => changedFieldIds.has(catalogItem.fieldId))
-    .map((catalogItem) => {
-      const normalizedInput = getValueAtPath(writePayload, catalogItem.apiPath);
+  const fieldChanges = fieldSchema
+    .filter((field) => changedFieldIds.has(field.fieldId))
+    .map((field) => {
+      const normalizedInput = getValueAtPath(writePayload, field.readPath);
 
       if (normalizedInput === undefined) {
         throw new Error(
-          `Protected write payload is missing required field ${catalogItem.fieldId}.`
+          `Protected write payload is missing required field ${field.fieldId}.`
         );
       }
 
       return {
-        fieldId: catalogItem.fieldId,
-        operation: catalogItem.supportsOperations[0]!,
+        fieldId: field.fieldId,
+        operation: field.operations?.[0] ?? "set",
         normalizedInput: structuredClone(normalizedInput)
       };
     });
@@ -125,13 +180,18 @@ function buildPayloadHash(payload: Record<string, unknown>): string {
   return hashNormalizedSnapshot(normalizeSnapshot(payload));
 }
 
-function buildGeneratedUserText(storeId: string, resolvedPatch: ResolvedPatch): string {
+function buildGeneratedUserText(
+  storeId: string,
+  resolvedPatch: ResolvedPatch,
+  fieldSchema: readonly ProtectedFieldDefinition[]
+): string {
+  const fieldsById = new Map(
+    fieldSchema.map((field) => [field.fieldId, field] as const)
+  );
   const labels = resolvedPatch.fieldChanges.map((fieldChange) => {
-    const catalogItem = parameterCatalog.find(
-      (item) => item.fieldId === fieldChange.fieldId
-    );
+    const field = fieldsById.get(fieldChange.fieldId);
 
-    return catalogItem?.labels[0] ?? fieldChange.fieldId;
+    return field ? getFieldLabel(field) : fieldChange.fieldId;
   });
 
   return `通过受保护写工具申请修改门店 ${storeId} 的 ${labels.join("、")}`;
@@ -148,6 +208,9 @@ export interface EnsureProtectedWritePlanDependencies {
 export interface EnsureProtectedWritePlanInput {
   storeId: string;
   writePayload: Record<string, unknown>;
+  fieldSchema: ProtectedFieldDefinition[];
+  fieldSchemaHash?: string;
+  bindingSnapshot?: unknown;
   beforeSnapshot?: Record<string, unknown>;
   executionContext?: MutationExecutionContext;
   requestedBy: string;
@@ -222,8 +285,10 @@ export async function ensureProtectedWritePlan(
   const resolvedPatch = buildResolvedPatchFromWritePayload(
     input.storeId,
     beforeSnapshot,
-    input.writePayload
+    input.writePayload,
+    input.fieldSchema
   );
+  const fieldSchemaHash = input.fieldSchemaHash ?? hashFieldSchema(input.fieldSchema);
   const plan: MutationPlan = {
     planId: planIdFactory(),
     mutationKind: `protected_write.${resolvedPatch.fieldChanges
@@ -231,13 +296,21 @@ export async function ensureProtectedWritePlan(
       .join("+")}`,
     status: "pending_ack",
     storeId: input.storeId,
-    userText: buildGeneratedUserText(input.storeId, resolvedPatch),
-    interpretationText: renderInterpretationText(resolvedPatch),
+    userText: buildGeneratedUserText(input.storeId, resolvedPatch, input.fieldSchema),
+    interpretationText: renderInterpretationText(resolvedPatch, input.fieldSchema),
     beforeSnapshot,
     beforeHash: hashNormalizedSnapshot(normalizeSnapshot(beforeSnapshot)),
     resolvedPatch,
     writePayload: structuredClone(input.writePayload),
-    diffItems: buildDiffItems(beforeSnapshot, input.writePayload, resolvedPatch),
+    diffItems: buildDiffItems(
+      beforeSnapshot,
+      input.writePayload,
+      resolvedPatch,
+      input.fieldSchema
+    ),
+    fieldSchemaSnapshot: structuredClone(input.fieldSchema),
+    fieldSchemaHash,
+    bindingSnapshot: input.bindingSnapshot,
     requestedBy: input.requestedBy,
     approvalChannel: input.approvalChannel,
     approvalSenderId: input.approvalSenderId,

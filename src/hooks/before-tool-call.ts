@@ -89,7 +89,8 @@ export async function guardBeforeToolCall(
   }
 
   const effectiveToolName = protectedWriteRequest?.toolName ?? input.toolName;
-  const isProtectedTool = registry.isProtectedToolName(effectiveToolName);
+  const isProtectedTool =
+    Boolean(protectedWriteRequest) || registry.isProtectedToolName(effectiveToolName);
 
   if (!isProtectedTool) {
     return {

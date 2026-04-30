@@ -34,7 +34,7 @@
 
 覆盖模块：
 
-- `catalog`
+- `field-schema`
 - `protected-write-request`
 - `snapshot-normalizer`
 - `diff`

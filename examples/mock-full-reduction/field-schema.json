@@ -1,0 +1,192 @@
+{
+  "resourceFlag": "--poiid",
+  "writeSubcommand": "write",
+  "readSubcommand": "read",
+  "ignoredFlags": ["--format", "--state-file"],
+  "fields": [
+    {
+      "fieldId": "activity_name",
+      "flag": "--activity-name",
+      "label": "活动名称",
+      "description": "Activity display name",
+      "valueType": "string",
+      "readPath": "activity_name",
+      "requiredInPayload": true
+    },
+    {
+      "fieldId": "activity_status",
+      "flag": "--activity-status",
+      "label": "活动状态",
+      "description": "Whether the activity is enabled or disabled",
+      "valueType": "enum",
+      "enumValues": ["enabled", "disabled"],
+      "readPath": "activity_status",
+      "requiredInPayload": true
+    },
+    {
+      "fieldId": "start_time",
+      "flag": "--start-time",
+      "label": "开始时间",
+      "description": "Activity start datetime",
+      "valueType": "datetime",
+      "readPath": "start_time",
+      "requiredInPayload": true
+    },
+    {
+      "fieldId": "end_time",
+      "flag": "--end-time",
+      "label": "结束时间",
+      "description": "Activity end datetime",
+      "valueType": "datetime",
+      "readPath": "end_time",
+      "requiredInPayload": true
+    },
+    {
+      "fieldId": "weekday_mask",
+      "flag": "--weekday-mask",
+      "label": "生效星期",
+      "description": "Weekday mask as a 7-bit 0/1 string",
+      "valueType": "string",
+      "readPath": "weekday_mask",
+      "requiredInPayload": true
+    },
+    {
+      "fieldId": "min_order_price",
+      "flag": "--min-order-price",
+      "label": "起送门槛",
+      "description": "Minimum order amount",
+      "valueType": "decimal",
+      "readPath": "min_order_price",
+      "requiredInPayload": true
+    },
+    {
+      "fieldId": "delivery_fee_discount",
+      "flag": "--delivery-fee-discount",
+      "label": "配送费减免",
+      "description": "Delivery fee discount amount",
+      "valueType": "decimal",
+      "readPath": "delivery_fee_discount",
+      "requiredInPayload": true
+    },
+    {
+      "fieldId": "full_reduction_tiers",
+      "label": "满减档位",
+      "description": "Promotion full reduction tiers such as 25-15 or 40-20",
+      "valueType": "json",
+      "readPath": "promotion.full_reduction_tiers",
+      "requiredInPayload": true,
+      "operations": ["replace_item"],
+      "display": {
+        "format": "json"
+      }
+    },
+    {
+      "fieldId": "tier_1_threshold",
+      "flag": "--tier-1-threshold",
+      "label": "第一档门槛",
+      "description": "Tier 1 threshold amount",
+      "valueType": "decimal",
+      "readPath": "tier_1_threshold",
+      "requiredInPayload": true
+    },
+    {
+      "fieldId": "tier_1_discount",
+      "flag": "--tier-1-discount",
+      "label": "第一档优惠",
+      "description": "Tier 1 discount amount",
+      "valueType": "decimal",
+      "readPath": "tier_1_discount",
+      "requiredInPayload": true
+    },
+    {
+      "fieldId": "tier_2_threshold",
+      "flag": "--tier-2-threshold",
+      "label": "第二档门槛",
+      "description": "Tier 2 threshold amount",
+      "valueType": "decimal",
+      "readPath": "tier_2_threshold",
+      "requiredInPayload": true
+    },
+    {
+      "fieldId": "tier_2_discount",
+      "flag": "--tier-2-discount",
+      "label": "第二档优惠",
+      "description": "Tier 2 discount amount",
+      "valueType": "decimal",
+      "readPath": "tier_2_discount",
+      "requiredInPayload": true
+    },
+    {
+      "fieldId": "tier_3_threshold",
+      "flag": "--tier-3-threshold",
+      "label": "第三档门槛",
+      "description": "Tier 3 threshold amount",
+      "valueType": "decimal",
+      "readPath": "tier_3_threshold",
+      "requiredInPayload": true
+    },
+    {
+      "fieldId": "tier_3_discount",
+      "flag": "--tier-3-discount",
+      "label": "第三档优惠",
+      "description": "Tier 3 discount amount",
+      "valueType": "decimal",
+      "readPath": "tier_3_discount",
+      "requiredInPayload": true
+    },
+    {
+      "fieldId": "stack_with_coupon",
+      "flag": "--stack-with-coupon",
+      "label": "优惠券叠加",
+      "description": "Whether coupons can be stacked",
+      "valueType": "boolean",
+      "readPath": "stack_with_coupon",
+      "requiredInPayload": true
+    },
+    {
+      "fieldId": "stack_with_membership",
+      "flag": "--stack-with-membership",
+      "label": "会员折扣叠加",
+      "description": "Whether membership discounts can be stacked",
+      "valueType": "boolean",
+      "readPath": "stack_with_membership",
+      "requiredInPayload": true
+    },
+    {
+      "fieldId": "new_customer_only",
+      "flag": "--new-customer-only",
+      "label": "仅新客可用",
+      "description": "Whether the activity is only for new customers",
+      "valueType": "boolean",
+      "readPath": "new_customer_only",
+      "requiredInPayload": true
+    },
+    {
+      "fieldId": "vip_only",
+      "flag": "--vip-only",
+      "label": "仅会员可用",
+      "description": "Whether the activity is only for VIP users",
+      "valueType": "boolean",
+      "readPath": "vip_only",
+      "requiredInPayload": true
+    },
+    {
+      "fieldId": "budget_limit",
+      "flag": "--budget-limit",
+      "label": "预算上限",
+      "description": "Campaign budget limit",
+      "valueType": "decimal",
+      "readPath": "budget_limit",
+      "requiredInPayload": true
+    },
+    {
+      "fieldId": "remark",
+      "flag": "--remark",
+      "label": "备注",
+      "description": "Operator remark",
+      "valueType": "string",
+      "readPath": "remark",
+      "requiredInPayload": true
+    }
+  ]
+}

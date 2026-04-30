@@ -1,4 +1,4 @@
-import { parameterCatalog } from "./catalog.js";
+import type { ProtectedFieldDefinition } from "./field-schema.js";
 import type { MutationExecutionContext, ResolvedPatch } from "./intent-types.js";
 import {
   defaultProtectedMutationRegistry,
@@ -12,6 +12,9 @@ export interface ProtectedWriteRequest {
   storeId: string;
   payload: Record<string, unknown>;
   beforeSnapshot?: Record<string, unknown>;
+  fieldSchema: ProtectedFieldDefinition[];
+  fieldSchemaHash: string;
+  bindingSnapshot?: unknown;
   executionContext?: MutationExecutionContext;
   approvedPlanId?: string;
   source: "tool" | "exec";
@@ -32,7 +35,7 @@ export async function resolveProtectedWriteRequest(input: {
   registry?: ProtectedMutationRegistry;
 }): Promise<ProtectedWriteRequestResolution | undefined> {
   const registry = input.registry ?? defaultProtectedMutationRegistry;
-  const matchedResult = registry.match({
+  const matchedResult = await registry.match({
     toolName: input.toolName,
     params: input.params,
     approvedPlanId: getString(input.params.approvedPlanId)
@@ -57,6 +60,9 @@ export async function resolveProtectedWriteRequest(input: {
         storeId: matched.resourceId,
         payload: matched.payload,
         executionContext: matched.executionContext,
+        fieldSchema: structuredClone(matched.fieldSchema),
+        fieldSchemaHash: matched.fieldSchemaHash,
+        bindingSnapshot: structuredClone(matched.binding),
         approvedPlanId: matched.approvedPlanId,
         source: matched.source
       }
@@ -78,7 +84,11 @@ export async function resolveProtectedWriteRequest(input: {
     storeId: matched.resourceId,
     fieldChanges: matched.fieldChanges
   };
-  const payload = buildWritePayload(beforeSnapshot, resolvedPatch, parameterCatalog);
+  const payload = buildWritePayload(
+    beforeSnapshot,
+    resolvedPatch,
+    matched.fieldSchema
+  );
 
   return {
     request: {
@@ -86,6 +96,9 @@ export async function resolveProtectedWriteRequest(input: {
       storeId: matched.resourceId,
       payload,
       beforeSnapshot,
+      fieldSchema: structuredClone(matched.fieldSchema),
+      fieldSchemaHash: matched.fieldSchemaHash,
+      bindingSnapshot: structuredClone(matched.binding),
       executionContext: matched.executionContext,
       approvedPlanId: matched.approvedPlanId,
       source: matched.source

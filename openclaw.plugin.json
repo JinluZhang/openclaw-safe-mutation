@@ -8,11 +8,11 @@
     "properties": {
       "dataDir": {
         "type": "string",
-        "description": "Directory for fake store snapshots and mutation plans"
+        "description": "Directory for safe-mutation plan state"
       },
       "protectedMutations": {
         "type": "array",
-        "description": "Explicit protected mutation bindings with write matcher and read invocation",
+        "description": "Explicit protected mutation bindings with write matcher, field schema, and read invocation",
         "items": {
           "type": "object",
           "additionalProperties": true

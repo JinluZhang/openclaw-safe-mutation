@@ -92,7 +92,7 @@ openclaw plugins install /path/to/openclaw-safe-mutation
 }
 ```
 
-如果不配置 `protectedMutations`，插件会使用内置的 `mock-full-reduction.exec` binding。生产接入真实 skill 时应显式配置自己的 binding。
+如果不配置 `protectedMutations`，插件不会启用任何受保护 binding。生产接入真实 skill 时必须显式配置自己的 binding，包括字段 schema、读 invocation 和写入口匹配规则。
 
 ### 4.2 安装 mock skill
 
@@ -244,7 +244,7 @@ chmod +x "$WORKSPACE/skills/mock-full-reduction-config/scripts/mock_full_reducti
 
 ## 7. 生产接入真实 Skill 的差异
 
-这个 mock skill 使用内置 binding 即可运行。真实 skill 接入时不要依赖内置 binding，应在插件配置里显式声明 `protectedMutations`：
+mock skill 现在也需要通过 `protectedMutations` 显式配置 binding；真实 skill 接入时同样应声明自己的字段 schema 和读写路径：
 
 ```json5
 {
@@ -266,9 +266,18 @@ chmod +x "$WORKSPACE/skills/mock-full-reduction-config/scripts/mock_full_reducti
                 writeSubcommand: "write",
                 readSubcommand: "read",
                 resourceFlag: "--poiid",
-                mutableFlags: {
-                  "--your-flag": "your_field_id"
-                }
+                mutableFlagsFromSchema: true
+              },
+              fieldSchema: {
+                kind: "shell",
+                commandTokens: [
+                  "{{pythonToken}}",
+                  "{{scriptPath}}",
+                  "schema",
+                  "--format",
+                  "json"
+                ],
+                resultPath: "fields"
               },
               read: {
                 kind: "shell",
@@ -282,7 +291,7 @@ chmod +x "$WORKSPACE/skills/mock-full-reduction-config/scripts/mock_full_reducti
                   "json"
                 ]
               },
-              compareNormalizer: "none"
+              compareNormalizer: { kind: "none" }
             }
           ]
         }

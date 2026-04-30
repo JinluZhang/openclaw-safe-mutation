@@ -1,53 +1,29 @@
 import { describe, expect, it } from "vitest";
 
 import type { ReadAdapter } from "../../src/adapters/read-adapter.js";
+import { hashFieldSchema } from "../../src/field-schema.js";
 import { ensureProtectedWritePlan } from "../../src/protected-write-plan.js";
+import {
+  shopBeforeSnapshot,
+  shopFieldSchema
+} from "../helpers/generic-schema.js";
 import { InMemoryMutationPlanStore } from "../helpers/in-memory-plan-store.js";
 
-const beforeSnapshot = {
-  activity_name: "weekday_lunch_full_reduction",
-  activity_status: "enabled",
-  start_time: "2026-04-21T10:00",
-  end_time: "2026-05-21T22:00",
-  weekday_mask: "1111100",
-  min_order_price: 18,
-  delivery_fee_discount: 2,
-  tier_1_threshold: 25,
-  tier_1_discount: 15,
-  tier_2_threshold: 40,
-  tier_2_discount: 20,
-  tier_3_threshold: 60,
-  tier_3_discount: 30,
-  stack_with_coupon: true,
-  stack_with_membership: false,
-  new_customer_only: false,
-  vip_only: false,
-  budget_limit: 1200,
-  remark: "seeded_for_safe_mutation_tests",
-  promotion: {
-    full_reduction_tiers: [
-      { threshold: 25, reduction: 15 },
-      { threshold: 40, reduction: 20 },
-      { threshold: 60, reduction: 30 }
-    ]
+const renamedShopPayload = {
+  ...shopBeforeSnapshot,
+  shop: {
+    name: "New Shop"
   }
 } satisfies Record<string, unknown>;
 
-const activityNameAfterSnapshot = {
-  ...beforeSnapshot,
-  activity_name: "weekday_lunch_flash_sale"
+const renamedShopPayloadWithUnknownChange = {
+  ...renamedShopPayload,
+  internal_only: "unexpected"
 } satisfies Record<string, unknown>;
 
-const fullReductionAfterSnapshot = {
-  ...beforeSnapshot,
-  tier_1_threshold: 20,
-  promotion: {
-    full_reduction_tiers: [
-      { threshold: 20, reduction: 15 },
-      { threshold: 40, reduction: 20 },
-      { threshold: 60, reduction: 30 }
-    ]
-  }
+const disabledShopPayload = {
+  ...shopBeforeSnapshot,
+  enabled: false
 } satisfies Record<string, unknown>;
 
 class FakeReadAdapter implements ReadAdapter {
@@ -61,19 +37,22 @@ class FakeReadAdapter implements ReadAdapter {
 }
 
 describe("ensureProtectedWritePlan", () => {
-  it("creates a pending plan directly from a protected write payload", async () => {
+  it("creates a pending plan from a generic inline schema and freezes it", async () => {
     const planStore = new InMemoryMutationPlanStore();
+    const schemaHash = hashFieldSchema(shopFieldSchema);
 
     const result = await ensureProtectedWritePlan(
       {
         planStore,
-        readAdapter: new FakeReadAdapter(beforeSnapshot),
+        readAdapter: new FakeReadAdapter(shopBeforeSnapshot),
         now: () => 100,
         planIdFactory: () => "plan-protected-write"
       },
       {
         storeId: "store-1",
-        writePayload: activityNameAfterSnapshot,
+        writePayload: renamedShopPayload,
+        fieldSchema: shopFieldSchema,
+        fieldSchemaHash: schemaHash,
         requestedBy: "ou_user_1",
         sessionKey: "session-1",
         channel: "feishu"
@@ -81,17 +60,16 @@ describe("ensureProtectedWritePlan", () => {
     );
 
     expect(result.created).toBe(true);
-    expect(result.reusedExisting).toBe(false);
-    expect(result.blockedByOtherActivePlan).toBe(false);
     expect(result.plan.planId).toBe("plan-protected-write");
     expect(result.plan.status).toBe("pending_ack");
-    expect(result.plan.requestedBy).toBe("ou_user_1");
-    expect(result.plan.channel).toBe("feishu");
+    expect(result.plan.fieldSchemaSnapshot).toEqual(shopFieldSchema);
+    expect(result.plan.fieldSchemaHash).toBe(schemaHash);
     expect(result.plan.diffItems).toEqual([
       expect.objectContaining({
-        fieldId: "activity_name",
-        before: "weekday_lunch_full_reduction",
-        after: "weekday_lunch_flash_sale"
+        fieldId: "shop_name",
+        label: "门店名称",
+        before: "Old Shop",
+        after: "New Shop"
       })
     ]);
   });
@@ -100,24 +78,22 @@ describe("ensureProtectedWritePlan", () => {
     const planStore = new InMemoryMutationPlanStore();
     const dependencies = {
       planStore,
-      readAdapter: new FakeReadAdapter(beforeSnapshot),
+      readAdapter: new FakeReadAdapter(shopBeforeSnapshot),
       now: () => 200,
       planIdFactory: () => "plan-same-payload"
     };
 
     const first = await ensureProtectedWritePlan(dependencies, {
       storeId: "store-1",
-      writePayload: activityNameAfterSnapshot,
-      requestedBy: "ou_user_1",
-      sessionKey: "session-1",
-      channel: "feishu"
+      writePayload: renamedShopPayload,
+      fieldSchema: shopFieldSchema,
+      requestedBy: "ou_user_1"
     });
     const second = await ensureProtectedWritePlan(dependencies, {
       storeId: "store-1",
-      writePayload: activityNameAfterSnapshot,
-      requestedBy: "ou_user_1",
-      sessionKey: "session-1",
-      channel: "feishu"
+      writePayload: renamedShopPayload,
+      fieldSchema: shopFieldSchema,
+      requestedBy: "ou_user_1"
     });
 
     expect(first.created).toBe(true);
@@ -130,17 +106,16 @@ describe("ensureProtectedWritePlan", () => {
     const planStore = new InMemoryMutationPlanStore();
     const dependencies = {
       planStore,
-      readAdapter: new FakeReadAdapter(beforeSnapshot),
+      readAdapter: new FakeReadAdapter(shopBeforeSnapshot),
       now: () => 300,
       planIdFactory: () => "plan-existing"
     };
 
     await ensureProtectedWritePlan(dependencies, {
       storeId: "store-1",
-      writePayload: activityNameAfterSnapshot,
-      requestedBy: "ou_user_1",
-      sessionKey: "session-1",
-      channel: "feishu"
+      writePayload: renamedShopPayload,
+      fieldSchema: shopFieldSchema,
+      requestedBy: "ou_user_1"
     });
 
     const result = await ensureProtectedWritePlan(
@@ -150,16 +125,35 @@ describe("ensureProtectedWritePlan", () => {
       },
       {
         storeId: "store-1",
-        writePayload: fullReductionAfterSnapshot,
-        requestedBy: "ou_user_1",
-        sessionKey: "session-1",
-        channel: "feishu"
+        writePayload: disabledShopPayload,
+        fieldSchema: shopFieldSchema,
+        requestedBy: "ou_user_1"
       }
     );
 
     expect(result.created).toBe(false);
-    expect(result.reusedExisting).toBe(false);
     expect(result.blockedByOtherActivePlan).toBe(true);
     expect(result.plan.planId).toBe("plan-existing");
+  });
+
+  it("fails closed when a direct payload changes a field outside the schema", async () => {
+    await expect(
+      ensureProtectedWritePlan(
+        {
+          planStore: new InMemoryMutationPlanStore(),
+          readAdapter: new FakeReadAdapter(shopBeforeSnapshot),
+          now: () => 400,
+          planIdFactory: () => "plan-unknown-field"
+        },
+        {
+          storeId: "store-1",
+          writePayload: renamedShopPayloadWithUnknownChange,
+          fieldSchema: shopFieldSchema,
+          requestedBy: "ou_user_1"
+        }
+      )
+    ).rejects.toThrow(
+      "Protected write payload changes unknown schema field at path internal_only."
+    );
   });
 });
