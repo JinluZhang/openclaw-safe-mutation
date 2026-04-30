@@ -5,24 +5,24 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import {
   renderMutationPlanForText,
   renderMutationPlanStatusForText
-} from "./src/channels/text-render.js";
+} from "./src/core/channels/text-render.js";
 import {
   resolveApprovalIdentityFromDispatchSource,
   resolveApprovalIdentityFromSessionSource,
   type ApprovalSessionIdentitySource
-} from "./src/approval-principal.js";
-import { runMutateApproveCommand } from "./src/commands/mutate-approve.js";
-import { runMutateCancelCommand } from "./src/commands/mutate-cancel.js";
-import { guardBeforeToolCall } from "./src/hooks/before-tool-call.js";
-import { FileMutationPlanStore } from "./src/file-plan-store.js";
-import { ensureProtectedWritePlan } from "./src/protected-write-plan.js";
-import { parseTextPlanAction } from "./src/text-plan-actions.js";
-import { loadProtectedMutationRegistry } from "./src/mutation-registry.js";
+} from "./src/core/approval-principal.js";
+import { runMutateApproveCommand } from "./src/core/commands/mutate-approve.js";
+import { runMutateCancelCommand } from "./src/core/commands/mutate-cancel.js";
+import { ensureProtectedWritePlan } from "./src/core/protected-write-plan.js";
+import { parseTextPlanAction } from "./src/core/text-plan-actions.js";
+import { loadProtectedMutationRegistry } from "./src/core/mutation-registry.js";
+import { guardBeforeToolCall } from "./src/openclaw/hooks/before-tool-call.js";
+import { FileMutationPlanStore } from "./src/openclaw/file-plan-store.js";
 import {
   ToolReadAdapter,
   ToolVerifyAdapter,
   ToolWriteAdapter
-} from "./src/tool-backed-adapters.js";
+} from "./src/core/tool-backed-adapters.js";
 
 const pluginConfigJsonSchema = {
   type: "object",

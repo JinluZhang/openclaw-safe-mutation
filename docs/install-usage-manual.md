@@ -9,6 +9,13 @@
 
 安装到 OpenClaw 实例后，业务 agent 仍然按普通 skill 方式调用 CLI；`safe-mutation` 插件在 `before_tool_call` 阶段识别匹配的 `exec` 写命令并接管审批流程。
 
+当前代码已按 Agent 化复用目标拆成两层：
+
+- `src/core/`：框架无关的 Safe Mutation core，包含 registry、`MutationPlan`、状态机、diff/hash、审批命令、执行器、文本 ACK 解析，以及读/写/验证 adapter 接口。
+- `src/openclaw/`：OpenClaw adapter，包含 `before_tool_call` hook 和 `FileMutationPlanStore`。
+
+旧的 `src/*`、`src/commands/*`、`src/adapters/*`、`src/channels/*`、`src/hooks/*` 导入路径仍作为 re-export 兼容层随包发布。OpenClaw 入口已经直接使用 `src/core/**` 和 `src/openclaw/**`，后续接 1024Agent 时应新增独立 adapter，而不是复制 core 安全语义。
+
 ## 2. 目录约定
 
 OpenClaw 默认目录：
@@ -50,6 +57,22 @@ openclaw-safe-mutation-0.1.0.tgz
 
 当前 `package.json` 已把 `openclaw.entry.ts`、`openclaw.plugin.json`、`src/`、`docs/`、`skills/` 和 `README.md` 放入打包范围。
 
+打包前可以用下面命令确认新拆分目录会进入包：
+
+```bash
+npm pack --dry-run
+```
+
+期望在 `Tarball Contents` 中看到：
+
+```text
+src/core/...
+src/openclaw/...
+src/adapters/...        # re-export compatibility files
+src/commands/...        # re-export compatibility files
+src/hooks/...           # re-export compatibility files
+```
+
 ## 4. 单实例安装
 
 下面以默认 OpenClaw 目录为例。
@@ -66,6 +89,26 @@ openclaw plugins install /path/to/openclaw-safe-mutation-0.1.0.tgz
 
 ```bash
 openclaw plugins install /path/to/openclaw-safe-mutation
+```
+
+如果本机已经安装过同名插件，使用 `--force` 覆盖：
+
+```bash
+openclaw plugins install --force /path/to/openclaw-safe-mutation-0.1.0.tgz
+```
+
+由于 Safe Mutation 需要执行配置里的 read/write/verify shell invocation，OpenClaw 安装器可能会检测到 `child_process` 并阻断安装。确认安装来源可信后，本地联调可显式加上 unsafe 安装开关：
+
+```bash
+openclaw plugins install --force --dangerously-force-unsafe-install /path/to/openclaw-safe-mutation-0.1.0.tgz
+```
+
+这只绕过安装期静态危险代码拦截；受保护写路径仍由插件自己的 registry、plan、ACK 和 verify 流程控制。生产部署应只对可信构建产物使用该开关，并记录包 hash 或 git commit。
+
+本地联调如果希望每次改代码后立即生效，也可以使用链接安装：
+
+```bash
+openclaw plugins install --force --link --dangerously-force-unsafe-install /path/to/openclaw-safe-mutation
 ```
 
 方式 B：使用 `plugins.load.paths` 加载本地目录。
@@ -122,6 +165,13 @@ openclaw plugins list
 ```
 
 期望能看到 `safe-mutation` 已加载并启用。
+
+也可以检查插件详情或配置：
+
+```bash
+openclaw plugins inspect safe-mutation
+openclaw config get plugins.entries.safe-mutation
+```
 
 ## 5. 使用流程
 

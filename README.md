@@ -44,6 +44,12 @@ openclaw-safe-mutation/
   docs/
     archive/
   src/
+    core/
+      adapters/
+      channels/
+      commands/
+    openclaw/
+      hooks/
     adapters/
     channels/
     commands/
@@ -55,6 +61,8 @@ openclaw-safe-mutation/
     seams/
     unit/
 ```
+
+`src/core/` 是框架无关的 Safe Mutation 语义层，包含 registry、`MutationPlan` 状态机、审批命令、执行器、diff、hash、字段 schema、文本 ACK 解析和工具读写适配接口。`src/openclaw/` 是 OpenClaw 绑定层，包含 OpenClaw hook 和文件版 plan store。旧的 `src/*` 路径暂时保留为 re-export 兼容层，方便现有测试、配置和外部引用平滑迁移。
 
 ## 本地命令
 
