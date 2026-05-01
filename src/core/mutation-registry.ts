@@ -15,7 +15,7 @@ import type {
 } from "./intent-types.js";
 import { getValueAtPath } from "./object-path.js";
 
-type TemplateValue = string | readonly string[];
+export type TemplateValue = string | readonly string[];
 
 export interface ShellInvocationTemplate {
   kind: "shell";
@@ -68,6 +68,23 @@ export interface ExecCommandMutationMatch {
   mutableFlagsFromSchema?: boolean;
 }
 
+export interface CliPositionalBinding {
+  variableName: string;
+  pathValue?: boolean;
+  required?: boolean;
+}
+
+export interface CliCommandMutationMatch {
+  kind: "cli";
+  toolName: string;
+  commandPrefix: readonly string[];
+  positionals?: readonly CliPositionalBinding[];
+  ignoredFlags?: readonly string[];
+  resourceIdTemplate: string;
+  mutableFlags?: Record<string, string | ExecFlagBinding>;
+  mutableFlagsFromSchema?: boolean;
+}
+
 export interface ToolPayloadMutationMatch {
   kind: "tool";
   toolName: string;
@@ -79,7 +96,10 @@ export interface ToolPayloadMutationMatch {
 export interface ProtectedMutationBinding {
   id: string;
   protectedToolName: string;
-  match: ExecCommandMutationMatch | ToolPayloadMutationMatch;
+  match:
+    | ExecCommandMutationMatch
+    | CliCommandMutationMatch
+    | ToolPayloadMutationMatch;
   fieldSchema: FieldSchemaSource;
   read: MutationInvocationTemplate;
   write?: MutationInvocationTemplate;
@@ -104,6 +124,25 @@ interface ExecMatchResult {
   error?: string;
 }
 
+export type CliCommandMatchStatus =
+  | "matched"
+  | "not_matched"
+  | "suspicious";
+
+export interface CliCommandFieldInput {
+  flag: string;
+  fieldId: string;
+  rawValue: string;
+}
+
+export interface CliCommandMatchResult {
+  status: CliCommandMatchStatus;
+  reason?: string;
+  variables?: Map<string, TemplateValue>;
+  resourceId?: string;
+  fieldInputs?: CliCommandFieldInput[];
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -119,6 +158,69 @@ function tokenLooksLikePython(token: string): boolean {
 
 function isEnvAssignment(token: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*=.*/u.test(token);
+}
+
+function scanShellCommand(command: string): {
+  hasDangerousSyntax: boolean;
+  unterminated: boolean;
+} {
+  let quote: "'" | '"' | undefined;
+  let escaping = false;
+
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index]!;
+    const next = command[index + 1];
+
+    if (escaping) {
+      escaping = false;
+      continue;
+    }
+
+    if (char === "\\" && quote !== "'") {
+      escaping = true;
+      continue;
+    }
+
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+        continue;
+      }
+
+      if (char === "`" || (char === "$" && next === "(")) {
+        return {
+          hasDangerousSyntax: true,
+          unterminated: false
+        };
+      }
+
+      continue;
+    }
+
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+
+    if (
+      char === ";" ||
+      char === "|" ||
+      char === "&" ||
+      char === "`" ||
+      (char === "$" && next === "(") ||
+      (char === "<" && next === "<")
+    ) {
+      return {
+        hasDangerousSyntax: true,
+        unterminated: false
+      };
+    }
+  }
+
+  return {
+    hasDangerousSyntax: false,
+    unterminated: escaping || Boolean(quote)
+  };
 }
 
 function splitFlagToken(token: string): {
@@ -296,6 +398,39 @@ function renderTemplateString(
   return template.replaceAll(/\{\{([A-Za-z0-9_.:-]+)\}\}/gu, (_match, name) =>
     resolveTemplateValue(variables.get(String(name)))
   );
+}
+
+function collectTemplatePlaceholders(template: string): string[] {
+  return Array.from(template.matchAll(/\{\{([A-Za-z0-9_.:-]+)\}\}/gu)).map(
+    (match) => match[1]!
+  );
+}
+
+function renderRequiredTemplateString(params: {
+  template: string;
+  variables: ReadonlyMap<string, TemplateValue>;
+}): { value?: string; missing?: string } {
+  for (const placeholder of collectTemplatePlaceholders(params.template)) {
+    const value = resolveTemplateValue(params.variables.get(placeholder));
+
+    if (value.length === 0) {
+      return {
+        missing: placeholder
+      };
+    }
+  }
+
+  const value = renderTemplateString(params.template, params.variables);
+
+  if (value.length === 0) {
+    return {
+      missing: "resourceIdTemplate"
+    };
+  }
+
+  return {
+    value
+  };
 }
 
 function renderTemplateTokens(
@@ -840,6 +975,377 @@ async function matchExecBinding(
   };
 }
 
+function commandPrefixAppearsInRawCommand(
+  command: string,
+  commandPrefix: readonly string[]
+): boolean {
+  return command.includes(commandPrefix.join(" "));
+}
+
+function findPrefixIndex(params: {
+  tokens: readonly string[];
+  prefix: readonly string[];
+}): number {
+  if (params.prefix.length === 0) {
+    return -1;
+  }
+
+  for (
+    let index = 0;
+    index <= params.tokens.length - params.prefix.length;
+    index += 1
+  ) {
+    if (
+      params.prefix.every(
+        (prefixToken, offset) => params.tokens[index + offset] === prefixToken
+      )
+    ) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function resolveCliValue(params: {
+  rawValue: string;
+  pathValue?: boolean;
+  workdir?: string;
+}): string {
+  if (!params.pathValue || path.isAbsolute(params.rawValue)) {
+    return params.rawValue;
+  }
+
+  return path.resolve(params.workdir ?? process.cwd(), params.rawValue);
+}
+
+export function matchCliCommand(params: {
+  bindingId: string;
+  match: CliCommandMutationMatch;
+  command: string;
+  workdir?: string;
+  mutableFlags?: Record<string, string | ExecFlagBinding>;
+  allowSchemaMutableFlags?: boolean;
+}): CliCommandMatchResult {
+  if (params.match.commandPrefix.length === 0) {
+    return {
+      status: "suspicious",
+      reason: `Protected CLI binding ${params.bindingId} commandPrefix must not be empty.`
+    };
+  }
+
+  const scan = scanShellCommand(params.command);
+  const tokens = tokenizeShellCommand(params.command);
+
+  if (!tokens || tokens.length === 0) {
+    return commandPrefixAppearsInRawCommand(
+      params.command,
+      params.match.commandPrefix
+    )
+      ? {
+          status: "suspicious",
+          reason: `Protected CLI binding ${params.bindingId} command could not be parsed safely.`
+        }
+      : { status: "not_matched" };
+  }
+
+  let startIndex = 0;
+  const envAssignmentTokens: string[] = [];
+
+  while (startIndex < tokens.length && isEnvAssignment(tokens[startIndex]!)) {
+    envAssignmentTokens.push(tokens[startIndex]!);
+    startIndex += 1;
+  }
+
+  const prefixAtStart = params.match.commandPrefix.every(
+    (prefixToken, offset) => tokens[startIndex + offset] === prefixToken
+  );
+  const prefixIndex = findPrefixIndex({
+    tokens,
+    prefix: params.match.commandPrefix
+  });
+  const rawContainsPrefix = commandPrefixAppearsInRawCommand(
+    params.command,
+    params.match.commandPrefix
+  );
+
+  if (!prefixAtStart) {
+    if (prefixIndex >= 0 || rawContainsPrefix) {
+      return {
+        status: "suspicious",
+        reason: `Protected CLI binding ${params.bindingId} command prefix appears inside a wrapper or compound command.`
+      };
+    }
+
+    return {
+      status: "not_matched"
+    };
+  }
+
+  if (scan.hasDangerousSyntax || scan.unterminated) {
+    return {
+      status: "suspicious",
+      reason: `Protected CLI binding ${params.bindingId} command contains unsupported shell syntax.`
+    };
+  }
+
+  let cursor = startIndex + params.match.commandPrefix.length;
+  const variables = new Map<string, TemplateValue>([
+    ["envAssignmentTokens", envAssignmentTokens],
+    ["commandPrefixTokens", params.match.commandPrefix]
+  ]);
+
+  if (params.workdir) {
+    variables.set("workdir", params.workdir);
+  }
+
+  const positionals = params.match.positionals ?? [];
+
+  for (let index = 0; index < positionals.length; index += 1) {
+    const spec = positionals[index]!;
+    const rawValue = tokens[cursor];
+
+    if (!rawValue || rawValue.startsWith("-")) {
+      if (spec.required === false) {
+        continue;
+      }
+
+      return {
+        status: "suspicious",
+        reason: `Protected CLI binding ${params.bindingId} is missing positional ${spec.variableName}.`
+      };
+    }
+
+    const value = resolveCliValue({
+      rawValue,
+      pathValue: spec.pathValue,
+      workdir: params.workdir
+    });
+
+    variables.set(spec.variableName, value);
+    variables.set(`positional:${index}`, value);
+    cursor += 1;
+  }
+
+  if (tokens[cursor] && !tokens[cursor]!.startsWith("-")) {
+    return {
+      status: "suspicious",
+      reason: `Protected CLI binding ${params.bindingId} contains unsupported positional token ${tokens[cursor]}.`
+    };
+  }
+
+  const mutableFlags = params.mutableFlags ?? params.match.mutableFlags ?? {};
+  const resourcePlaceholders = new Set(
+    collectTemplatePlaceholders(params.match.resourceIdTemplate)
+  );
+  const fieldInputs: CliCommandFieldInput[] = [];
+
+  while (cursor < tokens.length) {
+    const token = tokens[cursor]!;
+
+    if (!token.startsWith("--")) {
+      return {
+        status: "suspicious",
+        reason: `Protected CLI binding ${params.bindingId} contains unsupported token ${token}.`
+      };
+    }
+
+    const { flag, inlineValue } = splitFlagToken(token);
+    const rawValue = inlineValue ?? tokens[cursor + 1];
+
+    if (!rawValue || (!inlineValue && rawValue.startsWith("--"))) {
+      return {
+        status: "suspicious",
+        reason: `Protected CLI binding ${params.bindingId} is missing a value for ${flag}.`
+      };
+    }
+
+    variables.set(`flag:${flag}`, rawValue);
+
+    if (params.match.ignoredFlags?.includes(flag)) {
+      cursor += inlineValue !== undefined ? 1 : 2;
+      continue;
+    }
+
+    const flagBinding = mutableFlags[flag];
+
+    if (flagBinding) {
+      fieldInputs.push({
+        flag,
+        fieldId:
+          typeof flagBinding === "string" ? flagBinding : flagBinding.fieldId,
+        rawValue
+      });
+      cursor += inlineValue !== undefined ? 1 : 2;
+      continue;
+    }
+
+    if (resourcePlaceholders.has(`flag:${flag}`)) {
+      cursor += inlineValue !== undefined ? 1 : 2;
+      continue;
+    }
+
+    if (params.allowSchemaMutableFlags) {
+      cursor += inlineValue !== undefined ? 1 : 2;
+      continue;
+    }
+
+    return {
+      status: "suspicious",
+      reason: `Protected CLI binding ${params.bindingId} contains unsupported flag ${flag}.`
+    };
+  }
+
+  const renderedResourceId = renderRequiredTemplateString({
+    template: params.match.resourceIdTemplate,
+    variables
+  });
+
+  if (!renderedResourceId.value) {
+    return {
+      status: "suspicious",
+      reason: `Protected CLI binding ${params.bindingId} is missing required resource template value ${renderedResourceId.missing}.`
+    };
+  }
+
+  return {
+    status: "matched",
+    variables,
+    resourceId: renderedResourceId.value,
+    fieldInputs
+  };
+}
+
+async function matchCliBinding(
+  binding: ProtectedMutationBinding,
+  input: {
+    command: string;
+    workdir?: string;
+    approvedPlanId?: string;
+  }
+): Promise<ExecMatchResult | undefined> {
+  if (binding.match.kind !== "cli") {
+    return;
+  }
+
+  let cliResult = matchCliCommand({
+    bindingId: binding.id,
+    match: binding.match,
+    command: input.command,
+    workdir: input.workdir,
+    allowSchemaMutableFlags: binding.match.mutableFlagsFromSchema
+  });
+
+  if (cliResult.status === "not_matched") {
+    return;
+  }
+
+  if (cliResult.status === "suspicious") {
+    return {
+      error: cliResult.reason
+    };
+  }
+
+  const resolvedSchema = await resolveFieldSchema({
+    binding,
+    variables: cliResult.variables!
+  });
+  const fieldsById = new Map(
+    resolvedSchema.fields.map((field) => [field.fieldId, field] as const)
+  );
+  const mutableFlags = {
+    ...(binding.match.mutableFlags ?? {})
+  };
+
+  if (binding.match.mutableFlagsFromSchema) {
+    for (const field of resolvedSchema.fields) {
+      if (field.flag) {
+        mutableFlags[field.flag] = {
+          fieldId: field.fieldId
+        };
+      }
+    }
+
+    cliResult = matchCliCommand({
+      bindingId: binding.id,
+      match: binding.match,
+      command: input.command,
+      workdir: input.workdir,
+      mutableFlags
+    });
+
+    if (cliResult.status === "suspicious") {
+      return {
+        error: cliResult.reason
+      };
+    }
+
+    if (cliResult.status === "not_matched") {
+      return;
+    }
+  }
+
+  const fieldChanges: ResolvedPatch["fieldChanges"] = [];
+
+  for (const inputField of cliResult.fieldInputs ?? []) {
+    const field = fieldsById.get(inputField.fieldId);
+
+    if (!field) {
+      return {
+        error: `Protected CLI binding ${binding.id} references unknown schema field ${inputField.fieldId}.`
+      };
+    }
+
+    fieldChanges.push({
+      fieldId: inputField.fieldId,
+      operation: "set",
+      normalizedInput: parseFieldValue(field, inputField.rawValue)
+    });
+  }
+
+  if (fieldChanges.length === 0) {
+    return {
+      error: `Protected CLI binding ${binding.id} must include at least one mutable field.`
+    };
+  }
+
+  const variables = cliResult.variables!;
+  const resourceId = cliResult.resourceId!;
+  variables.set("resourceId", resourceId);
+  const readInvocation = renderInvocationTemplate(binding.read, variables);
+  const verifyInvocation = binding.verify
+    ? renderInvocationTemplate(binding.verify, variables)
+    : readInvocation;
+  const executionContext: MutationExecutionContext = {
+    kind: "configured_mutation",
+    bindingId: binding.id,
+    protectedToolName: binding.protectedToolName,
+    resourceId,
+    readInvocation,
+    writeInvocation: {
+      kind: "shell",
+      command: input.command.trim(),
+      ...(input.workdir ? { workdir: input.workdir } : {})
+    },
+    verifyInvocation,
+    compareNormalizer: binding.compareNormalizer,
+    ...(input.workdir ? { workdir: input.workdir } : {})
+  };
+
+  return {
+    matched: {
+      binding,
+      resourceId,
+      fieldSchema: structuredClone(resolvedSchema.fields),
+      fieldSchemaHash: resolvedSchema.hash,
+      fieldChanges,
+      executionContext,
+      approvedPlanId: input.approvedPlanId,
+      source: "exec"
+    }
+  };
+}
+
 async function matchToolBinding(
   binding: ProtectedMutationBinding,
   input: {
@@ -966,6 +1472,34 @@ export class ProtectedMutationRegistry {
         continue;
       }
 
+      if (binding.match.kind === "cli") {
+        const command = getString(input.params.command);
+
+        if (!command) {
+          continue;
+        }
+
+        let result: ExecMatchResult | undefined;
+
+        try {
+          result = await matchCliBinding(binding, {
+            command,
+            workdir: getString(input.params.workdir),
+            approvedPlanId: input.approvedPlanId
+          });
+        } catch (error) {
+          return {
+            error: error instanceof Error ? error.message : String(error)
+          };
+        }
+
+        if (result?.error || result?.matched) {
+          return result;
+        }
+
+        continue;
+      }
+
       try {
         const matched = await matchToolBinding(binding, {
           params: input.params,
@@ -1000,7 +1534,9 @@ function looksLikeProtectedMutationBinding(
   return (
     typeof value.id === "string" &&
     typeof value.protectedToolName === "string" &&
-    (value.match.kind === "exec" || value.match.kind === "tool") &&
+    (value.match.kind === "exec" ||
+      value.match.kind === "cli" ||
+      value.match.kind === "tool") &&
     isRecord(value.fieldSchema) &&
     isRecord(value.read)
   );

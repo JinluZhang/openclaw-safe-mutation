@@ -3,6 +3,7 @@ import { createServer, type Server } from "node:http";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  matchCliCommand,
   ProtectedMutationRegistry,
   type ProtectedMutationBinding
 } from "../../src/mutation-registry.js";
@@ -89,6 +90,45 @@ function buildDirectToolBinding(
   };
 }
 
+function buildCliBinding(
+  overrides: Partial<ProtectedMutationBinding> = {}
+): ProtectedMutationBinding {
+  return {
+    id: "shop.cli",
+    protectedToolName: "shop-settings",
+    match: {
+      kind: "cli",
+      toolName: "exec",
+      commandPrefix: ["shopctl", "settings", "set"],
+      positionals: [
+        {
+          variableName: "storeId"
+        }
+      ],
+      resourceIdTemplate: "{{storeId}}",
+      mutableFlagsFromSchema: true,
+      ignoredFlags: ["--format"]
+    },
+    fieldSchema: {
+      kind: "inline",
+      fields: shopFieldSchema
+    },
+    read: {
+      kind: "shell",
+      commandTokens: nodePrintJsonCommand({
+        shop: {
+          name: "Old Shop"
+        },
+        enabled: true,
+        delivery: {
+          min_order_price: 20
+        }
+      })
+    },
+    ...overrides
+  };
+}
+
 async function listenWithSchema(schemaBody: unknown): Promise<string> {
   const server = createServer((_request, response) => {
     response.setHeader("content-type", "application/json");
@@ -110,6 +150,42 @@ async function listenWithSchema(schemaBody: unknown): Promise<string> {
 }
 
 describe("ProtectedMutationRegistry schema-backed matching", () => {
+  it("returns explicit matched, not_matched, and suspicious states for generic CLI matching", () => {
+    const match = {
+      kind: "cli",
+      toolName: "exec",
+      commandPrefix: ["shopctl", "settings", "set"],
+      resourceIdTemplate: "{{flag:--store-id}}",
+      mutableFlags: {
+        "--shop-name": "shop_name"
+      }
+    } as const;
+
+    expect(
+      matchCliCommand({
+        bindingId: "shop.cli",
+        match,
+        command: "shopctl settings set --store-id 10001 --shop-name Fresh"
+      }).status
+    ).toBe("matched");
+
+    expect(
+      matchCliCommand({
+        bindingId: "shop.cli",
+        match,
+        command: "otherctl settings set --store-id 10001 --shop-name Fresh"
+      }).status
+    ).toBe("not_matched");
+
+    expect(
+      matchCliCommand({
+        bindingId: "shop.cli",
+        match,
+        command: "shopctl settings set --store-id 10001 --shop-name Fresh && true"
+      }).status
+    ).toBe("suspicious");
+  });
+
   it("matches exec writes with an inline schema and schema-derived flags", async () => {
     const registry = new ProtectedMutationRegistry([
       buildExecBinding({
@@ -204,6 +280,108 @@ describe("ProtectedMutationRegistry schema-backed matching", () => {
     expect(resolution?.error).toBeUndefined();
     expect(resolution?.request?.source).toBe("tool");
     expect(resolution?.request?.fieldSchema).toEqual(shopFieldSchema);
+  });
+
+  it("matches generic CLI commands with positionals, quoted values, and schema-derived flags", async () => {
+    const registry = new ProtectedMutationRegistry([buildCliBinding()]);
+
+    const resolution = await resolveProtectedWriteRequest({
+      toolName: "exec",
+      params: {
+        command:
+          'shopctl settings set store-1 --shop-name "Fresh Market" --enabled=false --min-order-price 25 --format json'
+      },
+      registry
+    });
+
+    expect(resolution?.error).toBeUndefined();
+    expect(resolution?.request).toMatchObject({
+      toolName: "shop-settings",
+      storeId: "store-1",
+      source: "exec"
+    });
+    expect(resolution?.request?.payload).toMatchObject({
+      shop: {
+        name: "Fresh Market"
+      },
+      enabled: false,
+      delivery: {
+        min_order_price: 25
+      }
+    });
+  });
+
+  it("supports escaped CLI values and resource IDs rendered from flag placeholders", async () => {
+    const registry = new ProtectedMutationRegistry([
+      buildCliBinding({
+        match: {
+          kind: "cli",
+          toolName: "exec",
+          commandPrefix: ["shopctl", "settings", "set"],
+          resourceIdTemplate: "shop:{{flag:--store-id}}",
+          mutableFlags: {
+            "--shop-name": "shop_name"
+          }
+        }
+      })
+    ]);
+
+    const resolution = await resolveProtectedWriteRequest({
+      toolName: "exec",
+      params: {
+        command:
+          "shopctl settings set --store-id=10001 --shop-name Fresh\\ Market"
+      },
+      registry
+    });
+
+    expect(resolution?.error).toBeUndefined();
+    expect(resolution?.request?.storeId).toBe("shop:10001");
+    expect(resolution?.request?.payload).toMatchObject({
+      shop: {
+        name: "Fresh Market"
+      }
+    });
+  });
+
+  it("leaves unrelated generic CLI commands unmatched", async () => {
+    const registry = new ProtectedMutationRegistry([buildCliBinding()]);
+
+    await expect(
+      registry.match({
+        toolName: "exec",
+        params: {
+          command: "otherctl settings set store-1 --shop-name Fresh"
+        }
+      })
+    ).resolves.toEqual({});
+  });
+
+  it("fails closed for suspicious generic CLI commands after a protected prefix", async () => {
+    const registry = new ProtectedMutationRegistry([buildCliBinding()]);
+    const suspiciousCommands = [
+      "shopctl settings set store-1 --shop-name Fresh && echo done",
+      "shopctl settings set store-1 --shop-name Fresh; echo done",
+      "shopctl settings set store-1 --shop-name Fresh | cat",
+      "shopctl settings set store-1 --shop-name `whoami`",
+      "shopctl settings set store-1 --shop-name $(whoami)",
+      "shopctl settings set store-1 <<EOF",
+      'bash -lc "shopctl settings set store-1 --shop-name Fresh"',
+      "shopctl settings set store-1 --shop-name"
+    ];
+
+    for (const command of suspiciousCommands) {
+      await expect(
+        registry.match({
+          toolName: "exec",
+          params: {
+            command
+          }
+        })
+      ).resolves.toMatchObject({
+        error: expect.stringMatching(/Protected CLI binding shop\.cli/u)
+      });
+    }
   });
 
   it("fails closed for unknown flags, missing resource IDs, and invalid typed values", async () => {

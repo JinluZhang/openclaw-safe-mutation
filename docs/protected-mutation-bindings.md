@@ -87,8 +87,11 @@
 
 - `id`：binding 的稳定 ID，会写入 `executionContext.bindingId`。
 - `protectedToolName`：规范化后的受保护业务写工具名。`exec` 写命令匹配后也会归一到这个名字。
-- `match.kind`：当前支持 `exec` 和 `tool`。
+- `match.kind`：当前支持 `exec`、`cli` 和 `tool`。
 - `match.resourceFlag` / `resourceParamPath`：目标业务对象 ID 的来源，当前样例是 `--poiid`。
+- `match.commandPrefix`：`cli` matcher 的受保护命令前缀，例如 `["shopctl", "settings", "set"]`。
+- `match.positionals`：`cli` matcher 的固定位置参数捕获配置，捕获后可在模板中用 `{{storeId}}` 或 `{{positional:0}}` 引用。
+- `match.resourceIdTemplate`：`cli` matcher 的资源 ID 模板，例如 `{{storeId}}` 或 `shop:{{flag:--store-id}}`。
 - `fieldSchema`：字段 schema 来源，支持 `inline`、`shell`、`http`。schema 是机器可读契约，不解析人类 `--help` 文本。
 - `match.mutableFlagsFromSchema`：为 `true` 时，schema 中带 `flag` 的字段自动成为可变 CLI flag。
 - `match.mutableFlags`：CLI flag 到 `fieldId` 的显式映射。未知 flag 会 fail closed。
@@ -113,6 +116,8 @@
 - `{{scriptDir}}`
 - `{{stateFilePath}}`
 - `{{workdir}}`
+- `{{commandPrefixTokens}}`
+- `{{positional:0}}`、`{{flag:--store-id}}`，以及 `cli.positionals[].variableName` 声明的变量名
 
 `http` invocation 支持 `url`、`method`、`headers`、`body`、`resultPath` 和 `normalizer`。读接口必须返回 JSON object，或通过 `resultPath` 选中 JSON object。
 
@@ -127,6 +132,53 @@
 ## Fail Closed 策略
 
 - 匹配到受保护写命令但缺字段、未知 flag、缺读配置时阻断。
+- `cli` matcher 未命中 `commandPrefix` 时放行；命中后如果出现 `&&`、`;`、`|`、反引号、`$()`、heredoc、wrapper/嵌套执行、未知 flag 或参数缺失，按 suspicious fail closed。
 - 受保护直接写工具没有匹配 binding 时阻断。
 - unrelated `exec` 不阻断。
 - ACK 后读取到的当前快照 hash 与 plan 的 `beforeHash` 不一致时进入 `conflict`，不写。
+
+## 通用 CLI Matcher 示例
+
+`cli` matcher 用于普通命令行工具，不要求 Python 解释器或脚本 basename：
+
+```json
+{
+  "id": "shop.cli",
+  "protectedToolName": "shop-settings",
+  "match": {
+    "kind": "cli",
+    "toolName": "exec",
+    "commandPrefix": ["shopctl", "settings", "set"],
+    "positionals": [
+      {
+        "variableName": "storeId"
+      }
+    ],
+    "resourceIdTemplate": "{{storeId}}",
+    "mutableFlagsFromSchema": true,
+    "ignoredFlags": ["--format"]
+  },
+  "fieldSchema": {
+    "kind": "inline",
+    "fields": [
+      {
+        "fieldId": "shop_name",
+        "flag": "--shop-name",
+        "label": "门店名称",
+        "valueType": "string",
+        "readPath": "shop.name"
+      }
+    ]
+  },
+  "read": {
+    "kind": "shell",
+    "commandTokens": ["shopctl", "settings", "read", "{{resourceId}}"]
+  }
+}
+```
+
+支持的参数形式包括：
+
+- `--flag value`
+- `--flag=value`
+- 单引号、双引号和反斜杠转义后的单个参数值
