@@ -32,6 +32,7 @@
 - [架构说明](./docs/architecture.md)
 - [概要技术设计](./docs/technical-design-overview.md)
 - [受保护变更 Binding 设计](./docs/protected-mutation-bindings.md)
+- [Safe Mutation 1024Agent 适配方案](./docs/safe-mutation-1024-adaptation-plan.md)
 - [关键技术要点](./docs/key-technical-notes.md)
 - [安装与使用手册](./docs/install-usage-manual.md)
 - [验证方案](./docs/validation-plan.md)

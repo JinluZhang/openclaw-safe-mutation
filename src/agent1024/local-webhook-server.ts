@@ -12,7 +12,7 @@ import { startAgent1024WebhookServer } from "./webhook-server.js";
 import { ProtectedMutationRegistry } from "../core/mutation-registry.js";
 
 function getPort(): number {
-  const rawPort = process.env.AGENT1024_WEBHOOK_PORT ?? "8080";
+  const rawPort = process.env.AGENT1024_WEBHOOK_PORT ?? "10086";
   const port = Number(rawPort);
 
   if (!Number.isInteger(port) || port <= 0) {

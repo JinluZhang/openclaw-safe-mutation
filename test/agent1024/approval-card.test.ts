@@ -72,7 +72,7 @@ describe("agent1024 approval card", () => {
       plan: buildPlan(),
       options: {
         callbackUrl:
-          "http://localhost:8080/webhook/safe-mutation/user-message-received",
+          "http://localhost:10086/webhook/safe-mutation/user-message-received",
         method: "POST"
       }
     });
@@ -88,7 +88,7 @@ describe("agent1024 approval card", () => {
             label: "确认执行",
             type: "REQUEST",
             data: {
-              url: "http://localhost:8080/webhook/safe-mutation/user-message-received",
+              url: "http://localhost:10086/webhook/safe-mutation/user-message-received",
               method: "POST",
               params: expect.objectContaining({
                 event: "USER_MESSAGE_RECEIVED",
@@ -103,7 +103,7 @@ describe("agent1024 approval card", () => {
             label: "取消执行",
             type: "REQUEST",
             data: {
-              url: "http://localhost:8080/webhook/safe-mutation/user-message-received",
+              url: "http://localhost:10086/webhook/safe-mutation/user-message-received",
               method: "POST",
               params: expect.objectContaining({
                 event: "USER_MESSAGE_RECEIVED",

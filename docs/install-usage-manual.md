@@ -312,7 +312,7 @@ GET  /webhook/safe-mutation/healthz
 
 ### 7.1 本地启动
 
-本地联调默认监听 8080：
+本地联调默认监听 10086：
 
 ```bash
 npm run dev:agent1024-webhook
@@ -321,7 +321,7 @@ npm run dev:agent1024-webhook
 启动后可以用下面命令确认服务可用：
 
 ```bash
-curl -sS http://localhost:8080/webhook/safe-mutation/healthz
+curl -sS http://localhost:10086/webhook/safe-mutation/healthz
 ```
 
 期望返回：
@@ -333,7 +333,7 @@ curl -sS http://localhost:8080/webhook/safe-mutation/healthz
 `pre-tool-use` smoke test：
 
 ```bash
-curl -sS -X POST http://localhost:8080/webhook/safe-mutation/pre-tool-use \
+curl -sS -X POST http://localhost:10086/webhook/safe-mutation/pre-tool-use \
   -H 'Content-Type: application/json' \
   -d '{
     "event": "PRE_TOOL_USE",
@@ -370,9 +370,9 @@ grep -qxF '.agent1024/' .git/info/exclude || printf '%s\n' '.agent1024/' >> .git
 ```bash
 AGENT1024_SHELL_EXEC_BASE_URL=https://1024.inf.test.sankuai.com
 AGENT1024_SHELL_EXEC_API_KEY=<test-api-key>
-AGENT1024_WEBHOOK_PORT=8080
+AGENT1024_WEBHOOK_PORT=10086
 AGENT1024_WEBHOOK_PATH_PREFIX=/webhook/safe-mutation
-AGENT1024_APPROVAL_CALLBACK_URL=http://localhost:8080/webhook/safe-mutation/user-message-received
+AGENT1024_APPROVAL_CALLBACK_URL=http://localhost:10086/webhook/safe-mutation/user-message-received
 AGENT1024_APPROVAL_CARD_METHOD=POST
 ```
 

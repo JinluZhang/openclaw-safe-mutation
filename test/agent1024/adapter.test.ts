@@ -121,7 +121,7 @@ describe("agent1024 adapter", () => {
           productStatusBinding
         ]),
         approvalCallbackUrl:
-          "http://localhost:8080/webhook/safe-mutation/user-message-received",
+          "http://localhost:10086/webhook/safe-mutation/user-message-received",
         now: () => 100
       },
       {
