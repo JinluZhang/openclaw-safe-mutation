@@ -152,4 +152,38 @@ describe("core invariants", () => {
 
     expect(plans.map((plan) => plan.planId)).toEqual(["plan-1"]);
   });
+
+  it("transitions plan status with compare-and-swap semantics", async () => {
+    const store = new InMemoryMutationPlanStore();
+    await store.create(buildPlan("approved"));
+
+    const firstTransition = await store.tryTransition(
+      "plan-1",
+      "approved",
+      "executing",
+      {
+        executedAtMs: 2
+      }
+    );
+    const secondTransition = await store.tryTransition(
+      "plan-1",
+      "approved",
+      "executing"
+    );
+
+    expect(firstTransition).toEqual(
+      expect.objectContaining({
+        status: "executing",
+        executedAtMs: 2,
+        version: 2
+      })
+    );
+    expect(secondTransition).toBeUndefined();
+    await store.updateStatus("plan-1", "succeeded");
+    await expect(
+      store.tryTransition("plan-1", "succeeded", "approved")
+    ).rejects.toThrow(
+      "Cannot transition terminal plan from succeeded to approved"
+    );
+  });
 });

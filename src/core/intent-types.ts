@@ -17,6 +17,14 @@ export type MutationPlanStatus =
   | "cancelled"
   | "expired";
 
+export type ApprovalDeliveryStatus =
+  | "pending"
+  | "sent"
+  | "delivered"
+  | "read"
+  | "failed"
+  | "unknown";
+
 export interface ResolvedPatchFieldChange {
   fieldId: string;
   operation: MutationOperation;
@@ -119,6 +127,10 @@ export interface MutationPlan {
   approvalSenderId?: string;
   approvalAccountId?: string;
   approvalPrincipal?: string;
+  approvalDeliveryStatus?: ApprovalDeliveryStatus;
+  approvalMessageId?: string;
+  approvalDeliveredAtMs?: number;
+  approvalReadAtMs?: number;
   approvedBy?: string;
   approvedPrincipal?: string;
   executionContext?: MutationExecutionContext;
@@ -130,6 +142,7 @@ export interface MutationPlan {
   executedAtMs?: number;
   finishedAtMs?: number;
   idempotencyKey: string;
+  version?: number;
   result?: MutationResult;
 }
 

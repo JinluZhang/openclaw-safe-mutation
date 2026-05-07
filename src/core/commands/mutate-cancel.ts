@@ -62,20 +62,29 @@ export async function runMutateCancelCommand(
   }
 
   if (plan.expiresAtMs <= now()) {
-    plan.status = "expired";
-    plan.finishedAtMs ??= now();
-    await dependencies.planStore.update(plan);
-    return plan;
+    const expiredPlan = await dependencies.planStore.tryTransition(
+      plan.planId,
+      plan.status,
+      "expired",
+      {
+        finishedAtMs: plan.finishedAtMs ?? now()
+      }
+    );
+    return expiredPlan ?? (await dependencies.planStore.get(plan.planId)) ?? plan;
   }
 
-  plan.status = "cancelled";
-  if (normalizedPlanApprovalPrincipal) {
-    plan.approvalPrincipal = normalizedPlanApprovalPrincipal;
-  }
-  plan.finishedAtMs = now();
-  plan.result = {
-    error: `Cancelled by ${input.cancelledBy}`
-  };
-  await dependencies.planStore.update(plan);
-  return plan;
+  const cancelledPlan = await dependencies.planStore.tryTransition(
+    plan.planId,
+    plan.status,
+    "cancelled",
+    {
+      approvalPrincipal: normalizedPlanApprovalPrincipal ?? plan.approvalPrincipal,
+      finishedAtMs: now(),
+      result: {
+        error: `Cancelled by ${input.cancelledBy}`
+      }
+    }
+  );
+
+  return cancelledPlan ?? (await dependencies.planStore.get(plan.planId)) ?? plan;
 }

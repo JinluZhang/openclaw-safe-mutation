@@ -316,12 +316,14 @@ export async function ensureProtectedWritePlan(
     approvalSenderId: input.approvalSenderId,
     approvalAccountId: input.approvalAccountId,
     approvalPrincipal: input.approvalPrincipal,
+    approvalDeliveryStatus: "pending",
     executionContext: input.executionContext,
     sessionKey: input.sessionKey,
     channel: input.channel,
     createdAtMs: nowMs,
     expiresAtMs: nowMs + planTtlMs,
-    idempotencyKey: `idem_${randomUUID()}`
+    idempotencyKey: `idem_${randomUUID()}`,
+    version: 1
   };
 
   await dependencies.planStore.create(plan);

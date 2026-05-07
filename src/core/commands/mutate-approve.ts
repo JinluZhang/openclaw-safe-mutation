@@ -60,22 +60,48 @@ export async function runMutateApproveCommand(
   }
 
   if (plan.expiresAtMs <= now()) {
-    plan.status = "expired";
-    plan.finishedAtMs ??= now();
-    await dependencies.planStore.update(plan);
-    return plan;
+    const expiredPlan = await dependencies.planStore.tryTransition(
+      plan.planId,
+      plan.status,
+      "expired",
+      {
+        finishedAtMs: plan.finishedAtMs ?? now()
+      }
+    );
+    return expiredPlan ?? (await dependencies.planStore.get(plan.planId)) ?? plan;
+  }
+
+  if (plan.approvalDeliveryStatus === "failed") {
+    throw new Error(
+      `Plan ${input.planId} approval request was not delivered and cannot be approved`
+    );
   }
 
   if (plan.status === "pending_ack") {
-    if (normalizedPlanApprovalPrincipal) {
-      plan.approvalPrincipal = normalizedPlanApprovalPrincipal;
-    }
+    const approvedPlan = await dependencies.planStore.tryTransition(
+      plan.planId,
+      "pending_ack",
+      "approved",
+      {
+        approvalPrincipal:
+          normalizedPlanApprovalPrincipal ?? plan.approvalPrincipal,
+        approvedBy: input.approvedBy,
+        approvedPrincipal: normalizedInputApprovalPrincipal,
+        approvedAtMs: now()
+      }
+    );
 
-    plan.status = "approved";
-    plan.approvedBy = input.approvedBy;
-    plan.approvedPrincipal = normalizedInputApprovalPrincipal;
-    plan.approvedAtMs = now();
-    await dependencies.planStore.update(plan);
+    if (!approvedPlan) {
+      const currentPlan = await dependencies.planStore.get(plan.planId);
+
+      if (currentPlan) {
+        return currentPlan.status === "approved"
+          ? executeMutationPlan(dependencies, input.planId)
+          : currentPlan;
+      }
+
+      return plan;
+    }
   } else if (plan.status === "approved") {
     const normalizedApprovedPrincipal = normalizeApprovalPrincipal(
       plan.approvedPrincipal
@@ -105,11 +131,25 @@ export async function runMutateApproveCommand(
     }
 
     if (normalizedPlanApprovalPrincipal) {
-      plan.approvalPrincipal = normalizedPlanApprovalPrincipal;
+      await dependencies.planStore.tryTransition(
+        plan.planId,
+        "approved",
+        "approved",
+        {
+          approvalPrincipal: normalizedPlanApprovalPrincipal
+        }
+      );
     }
 
     if (normalizedApprovedPrincipal) {
-      plan.approvedPrincipal = normalizedApprovedPrincipal;
+      await dependencies.planStore.tryTransition(
+        plan.planId,
+        "approved",
+        "approved",
+        {
+          approvedPrincipal: normalizedApprovedPrincipal
+        }
+      );
     }
   } else {
     throw new Error(`Plan ${input.planId} cannot be approved from ${plan.status}`);

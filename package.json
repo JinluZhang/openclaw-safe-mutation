@@ -20,10 +20,11 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "npm run test:unit && npm run test:integration && npm run test:seams",
+    "test": "npm run test:unit && npm run test:integration && npm run test:seams && npm run test:agent1024",
     "test:unit": "vitest run test/unit",
     "test:integration": "vitest run test/integration",
-    "test:seams": "vitest run test/seams"
+    "test:seams": "vitest run test/seams",
+    "test:agent1024": "vitest run test/agent1024"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",

@@ -44,58 +44,86 @@ export async function executeMutationPlan(
   }
 
   if (plan.expiresAtMs <= now()) {
-    plan.status = "expired";
-    plan.finishedAtMs ??= now();
-    await dependencies.planStore.update(plan);
-    return plan;
+    const expiredPlan = await dependencies.planStore.tryTransition(
+      plan.planId,
+      "approved",
+      "expired",
+      {
+        finishedAtMs: plan.finishedAtMs ?? now()
+      }
+    );
+    return expiredPlan ?? (await dependencies.planStore.get(plan.planId)) ?? plan;
   }
 
-  const currentSnapshot = await dependencies.readAdapter.readCurrentConfig({
-    storeId: plan.storeId,
-    executionContext: plan.executionContext
-  });
+  const executingPlan = await dependencies.planStore.tryTransition(
+    plan.planId,
+    "approved",
+    "executing",
+    {
+      executedAtMs: plan.executedAtMs ?? now()
+    }
+  );
+
+  if (!executingPlan) {
+    return (await dependencies.planStore.get(plan.planId)) ?? plan;
+  }
+
+  let currentSnapshot: Record<string, unknown>;
+
+  try {
+    currentSnapshot = await dependencies.readAdapter.readCurrentConfig({
+      storeId: executingPlan.storeId,
+      executionContext: executingPlan.executionContext
+    });
+  } catch (error) {
+    executingPlan.status = "failed";
+    executingPlan.finishedAtMs = now();
+    executingPlan.result = {
+      ...(executingPlan.result ?? {}),
+      error: error instanceof Error ? error.message : String(error)
+    };
+    await dependencies.planStore.update(executingPlan);
+    return executingPlan;
+  }
+
   const currentHash = hashNormalizedSnapshot(normalizeSnapshot(currentSnapshot));
 
-  if (currentHash !== plan.beforeHash) {
-    plan.status = "conflict";
-    plan.finishedAtMs = now();
-    plan.result = {
-      ...(plan.result ?? {}),
+  if (currentHash !== executingPlan.beforeHash) {
+    executingPlan.status = "conflict";
+    executingPlan.finishedAtMs = now();
+    executingPlan.result = {
+      ...(executingPlan.result ?? {}),
       error: "Current store config changed after approval"
     };
-    await dependencies.planStore.update(plan);
-    return plan;
+    await dependencies.planStore.update(executingPlan);
+    return executingPlan;
   }
-
-  plan.status = "executing";
-  plan.executedAtMs ??= now();
-  await dependencies.planStore.update(plan);
 
   try {
     const writeResult = await dependencies.writeAdapter.writeConfig({
-      storeId: plan.storeId,
-      payload: plan.writePayload,
-      executionContext: plan.executionContext
+      storeId: executingPlan.storeId,
+      payload: executingPlan.writePayload,
+      executionContext: executingPlan.executionContext
     });
     const verifySnapshot = await dependencies.verifyAdapter.verifyCurrentConfig({
-      storeId: plan.storeId,
-      executionContext: plan.executionContext
+      storeId: executingPlan.storeId,
+      executionContext: executingPlan.executionContext
     });
     const comparableVerifySnapshot = normalizeVerificationSnapshot({
       snapshot: verifySnapshot,
-      executionContext: plan.executionContext
+      executionContext: executingPlan.executionContext
     });
     const comparableWritePayload = normalizeVerificationSnapshot({
-      snapshot: plan.writePayload,
-      executionContext: plan.executionContext
+      snapshot: executingPlan.writePayload,
+      executionContext: executingPlan.executionContext
     });
     const verifySucceeded =
       hashNormalizedSnapshot(normalizeSnapshot(comparableVerifySnapshot)) ===
       hashNormalizedSnapshot(normalizeSnapshot(comparableWritePayload));
 
-    plan.status = verifySucceeded ? "succeeded" : "failed";
-    plan.finishedAtMs = now();
-    plan.result = {
+    executingPlan.status = verifySucceeded ? "succeeded" : "failed";
+    executingPlan.finishedAtMs = now();
+    executingPlan.result = {
       writeSucceeded: writeResult.exitCode === 0,
       verifySucceeded,
       writeStdout: writeResult.stdout,
@@ -103,16 +131,16 @@ export async function executeMutationPlan(
       verifySnapshot,
       error: verifySucceeded ? undefined : "Post-write verification failed"
     };
-    await dependencies.planStore.update(plan);
-    return plan;
+    await dependencies.planStore.update(executingPlan);
+    return executingPlan;
   } catch (error) {
-    plan.status = "failed";
-    plan.finishedAtMs = now();
-    plan.result = {
-      ...(plan.result ?? {}),
+    executingPlan.status = "failed";
+    executingPlan.finishedAtMs = now();
+    executingPlan.result = {
+      ...(executingPlan.result ?? {}),
       error: error instanceof Error ? error.message : String(error)
     };
-    await dependencies.planStore.update(plan);
-    return plan;
+    await dependencies.planStore.update(executingPlan);
+    return executingPlan;
   }
 }

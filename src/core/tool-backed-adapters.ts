@@ -136,7 +136,7 @@ function applyNormalizerSpec(
   }
 }
 
-function applySnapshotNormalizer(
+export function applySnapshotNormalizer(
   normalizer: SnapshotNormalizer | undefined,
   snapshot: Record<string, unknown>
 ): Record<string, unknown> {

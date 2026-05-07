@@ -5,7 +5,10 @@ import {
   type MutationPlanStatus
 } from "../../src/intent-types.js";
 import { sameApprovalPrincipal } from "../../src/approval-principal.js";
-import type { MutationPlanStore } from "../../src/plan-store.js";
+import type {
+  MutationPlanStore,
+  MutationPlanTransitionPatch
+} from "../../src/plan-store.js";
 
 function clonePlan<T>(value: T): T {
   return structuredClone(value);
@@ -34,7 +37,10 @@ export class InMemoryMutationPlanStore implements MutationPlanStore {
       throw new Error(`Plan ${plan.planId} already exists`);
     }
 
-    this.plans.set(plan.planId, clonePlan(plan));
+    this.plans.set(plan.planId, {
+      ...clonePlan(plan),
+      version: plan.version ?? 1
+    });
   }
 
   async get(planId: string): Promise<MutationPlan | undefined> {
@@ -71,7 +77,10 @@ export class InMemoryMutationPlanStore implements MutationPlanStore {
     }
 
     assertValidStatusTransition(currentPlan.status, plan.status);
-    this.plans.set(plan.planId, clonePlan(plan));
+    this.plans.set(plan.planId, {
+      ...clonePlan(plan),
+      version: (currentPlan.version ?? 1) + 1
+    });
   }
 
   async updateStatus(
@@ -86,6 +95,31 @@ export class InMemoryMutationPlanStore implements MutationPlanStore {
 
     plan.status = status;
     await this.update(plan);
+  }
+
+  async tryTransition(
+    planId: string,
+    fromStatus: MutationPlanStatus,
+    toStatus: MutationPlanStatus,
+    patch: MutationPlanTransitionPatch = {}
+  ): Promise<MutationPlan | undefined> {
+    const plan = this.plans.get(planId);
+
+    if (!plan || plan.status !== fromStatus) {
+      return undefined;
+    }
+
+    const nextPlan: MutationPlan = {
+      ...clonePlan(plan),
+      ...clonePlan(patch),
+      planId: plan.planId,
+      status: toStatus,
+      version: (plan.version ?? 1) + 1
+    };
+
+    assertValidStatusTransition(plan.status, nextPlan.status);
+    this.plans.set(planId, clonePlan(nextPlan));
+    return clonePlan(nextPlan);
   }
 
   async saveResult(

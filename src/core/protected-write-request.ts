@@ -5,7 +5,9 @@ import {
   type ProtectedMutationRegistry
 } from "./mutation-registry.js";
 import { buildWritePayload } from "./payload-builder.js";
-import { readSnapshotFromExecutionContext } from "./tool-backed-adapters.js";
+import {
+  readSnapshotFromExecutionContext as readSnapshotFromDefaultExecutionContext
+} from "./tool-backed-adapters.js";
 
 export interface ProtectedWriteRequest {
   toolName: string;
@@ -33,6 +35,10 @@ export async function resolveProtectedWriteRequest(input: {
   toolName: string;
   params: Record<string, unknown>;
   registry?: ProtectedMutationRegistry;
+  readSnapshotFromExecutionContext?: (
+    executionContext: MutationExecutionContext,
+    storeId: string
+  ) => Promise<Record<string, unknown>>;
 }): Promise<ProtectedWriteRequestResolution | undefined> {
   const registry = input.registry ?? defaultProtectedMutationRegistry;
   const matchedResult = await registry.match({
@@ -75,7 +81,10 @@ export async function resolveProtectedWriteRequest(input: {
     };
   }
 
-  const beforeSnapshot = await readSnapshotFromExecutionContext(
+  const readSnapshot =
+    input.readSnapshotFromExecutionContext ??
+    readSnapshotFromDefaultExecutionContext;
+  const beforeSnapshot = await readSnapshot(
     matched.executionContext,
     matched.resourceId
   );
