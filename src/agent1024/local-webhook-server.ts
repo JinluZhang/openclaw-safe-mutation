@@ -63,10 +63,7 @@ const server = await startAgent1024WebhookServer(
     writeAdapter: new Agent1024RuntimeWriteAdapter(runtimeOptions),
     verifyAdapter: new Agent1024RuntimeVerifyAdapter(runtimeOptions),
     notifier: new InMemoryAgent1024ApprovalNotifier(),
-    protectedMutationRegistry: new ProtectedMutationRegistry([]),
-    approvalCallbackUrl: process.env.AGENT1024_APPROVAL_CALLBACK_URL,
-    approvalCardMethod:
-      process.env.AGENT1024_APPROVAL_CARD_METHOD === "GET" ? "GET" : "POST"
+    protectedMutationRegistry: new ProtectedMutationRegistry([])
   },
   {
     host: process.env.AGENT1024_WEBHOOK_HOST ?? "0.0.0.0",
@@ -84,7 +81,7 @@ console.log(
   `Agent1024 Safe Mutation webhook listening on http://localhost:${server.port()}/webhook/safe-mutation`
 );
 console.log("Endpoints:");
-console.log("  POST /webhook/safe-mutation/pre-tool-use");
+console.log("  POST /webhook/safe-mutation/pre_tool_use");
 console.log("  POST /webhook/safe-mutation/user-message-received");
 console.log("  GET  /webhook/safe-mutation/healthz");
 

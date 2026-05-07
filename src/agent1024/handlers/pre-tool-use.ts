@@ -13,10 +13,6 @@ import {
 } from "../../openclaw/hooks/before-tool-call.js";
 import type { Agent1024ApprovalNotifier } from "../notifier.js";
 import {
-  buildAgent1024ApprovalCard,
-  serializeAgent1024Card
-} from "../approval-card.js";
-import {
   build1024ApprovalPrincipal,
   build1024RequestedBy,
   getApprovedPlanIdFrom1024ToolArguments,
@@ -37,8 +33,6 @@ export interface Agent1024PreToolUseHandlerDependencies {
   readAdapter: ReadAdapter;
   notifier: Agent1024ApprovalNotifier;
   protectedMutationRegistry?: ProtectedMutationRegistry;
-  approvalCallbackUrl?: string;
-  approvalCardMethod?: "GET" | "POST";
   now?: () => number;
   planTtlMs?: number;
 }
@@ -166,22 +160,10 @@ export async function handleAgent1024PreToolUse(
     return blockResponse(blockedByOtherPlanReason(planResult));
   }
 
-  const card = dependencies.approvalCallbackUrl
-    ? buildAgent1024ApprovalCard({
-        payload,
-        plan: planResult.plan,
-        options: {
-          callbackUrl: dependencies.approvalCallbackUrl,
-          method: dependencies.approvalCardMethod ?? "POST"
-        }
-      })
-    : undefined;
-  const cardMessage = card ? serializeAgent1024Card(card) : undefined;
   const delivery = await dependencies.notifier.sendApproval({
     payload,
     plan: planResult.plan,
-    text: cardMessage ?? renderMutationPlanForText(planResult.plan),
-    ...(card ? { card, cardMessage } : {})
+    text: renderMutationPlanForText(planResult.plan)
   });
   await markApprovalDelivery({
     planStore: dependencies.planStore,

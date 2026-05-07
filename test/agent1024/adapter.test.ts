@@ -120,8 +120,6 @@ describe("agent1024 adapter", () => {
         protectedMutationRegistry: new ProtectedMutationRegistry([
           productStatusBinding
         ]),
-        approvalCallbackUrl:
-          "http://localhost:10086/webhook/safe-mutation/user-message-received",
         now: () => 100
       },
       {
@@ -139,24 +137,9 @@ describe("agent1024 adapter", () => {
     expect(response.decision).toBe("block");
     expect(response.reason).toContain("SAFE_MUTATION_APPROVAL_SENT");
     expect(notifier.sent).toHaveLength(1);
-    expect(notifier.sent[0]!.cardMessage).toMatch(
-      /^:::\{"cardType":"commonAction"/u
-    );
-    expect(notifier.sent[0]!.card).toEqual(
-      expect.objectContaining({
-        cardType: "commonAction",
-        cardContent: expect.objectContaining({
-          positiveAction: expect.objectContaining({
-            label: "确认执行",
-            type: "REQUEST"
-          }),
-          negativeAction: expect.objectContaining({
-            label: "取消执行",
-            type: "REQUEST"
-          })
-        })
-      })
-    );
+    expect(notifier.sent[0]!.text).toContain("Plan:");
+    expect(notifier.sent[0]!.text).toContain("确认方式：回复“确认”后由系统直接执行");
+    expect(notifier.sent[0]!.text).toContain("取消方式：回复“取消”放弃本次变更");
 
     const plans = await planStore.listPendingByApprovalPrincipal(
       "wm:conv-1:alice"

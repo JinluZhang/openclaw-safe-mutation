@@ -247,7 +247,7 @@ interface MutationResult {
 
 ```ts
 interface MutationPlan {
-  // 高熵、不可枚举的计划 ID。文本 demo 会展示，结构化 UI 可隐藏在 callback payload。
+  // 高熵、不可枚举的计划 ID。文本 demo 会展示，结构化 UI 可隐藏在确认/取消消息载荷中。
   planId: string;
 
   // 变更类型描述，例如 protected_write.activity_name，用于审计和观测。
@@ -339,7 +339,7 @@ interface MutationPlan {
 - `beforeHash` 使用规范化 snapshot 计算，字段顺序不能影响 hash。
 - `diffItems` 是展示用，不是执行依据；执行依据是 `writePayload`。
 - `executionContext` 用于把 plan 绑定到真实读写路径，当前保存 `configured_mutation` 的 `bindingId`、`readInvocation`、`writeInvocation`、`verifyInvocation`。
-- `planId` 应是高熵不可枚举 ID。文本 demo 会展示它；结构化 UI 中建议隐藏在 callback payload。
+- `planId` 应是高熵不可枚举 ID。文本 demo 会展示它；结构化 UI 中建议隐藏在确认/取消消息载荷中。
 
 ### 2.6 `MutationPlanStore`
 

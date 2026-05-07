@@ -868,7 +868,7 @@ ACK 执行前建议校验：
 - `unknown`：首版可允许，但结果文案中提示确认的是最近一次待确认变更；高风险写操作建议不允许。
 - `sent/delivered/read`：允许继续审批。
 
-未来优先接入结构化卡片按钮，callback payload 中携带 `planId`，减少用户手写 planId 和误确认概率。
+未来如果 1024Agent 前端提供结构化按钮，点击事件也应先转换为普通用户消息，例如 `确认 {planId}` 或 `取消 {planId}`，再由 `USER_MESSAGE_RECEIVED` webhook 进入 Safe Mutation；Safe Mutation 不额外暴露卡片按钮直连回调接口。
 
 ## 13. 执行器要求
 
@@ -1244,7 +1244,7 @@ latencyMs
 产出：
 
 - 1024 卡片/按钮确认。
-- callback payload 携带隐藏 `planId`。
+- 点击事件由 1024Agent 转成 `确认 <planId>` / `取消 <planId>` 这类普通消息。
 - 文本 ACK 作为 fallback。
 - 投递回执状态接入。
 
@@ -1328,7 +1328,7 @@ MVP 必须通过：
 
 - 记录 messageId 和 delivery status。
 - 投递失败不允许确认。
-- 高风险写操作要求结构化卡片按钮。
+- 高风险写操作如果使用结构化按钮，也必须确保按钮点击会携带明确 `planId` 并转换为普通确认/取消消息。
 
 ### 21.6 多端重复确认
 
@@ -1377,7 +1377,6 @@ src/agent1024/
   shell-exec-client.ts
 test/agent1024/
   adapter.test.ts
-  approval-card.test.ts
   safe-mutation-context.test.ts
   shell-exec-client.test.ts
   sqlite-plan-store.test.ts
@@ -1413,11 +1412,11 @@ packages/
 - `runMutateApproveCommand()` 已使用 CAS 推进 `pending_ack -> approved`。
 - `executeMutationPlan()` 已使用 CAS 抢占 `approved -> executing`。
 - `resolveProtectedWriteRequest()` 已支持注入 read 函数，1024 adapter 可通过 runtime read 获取 before snapshot，不需要在 Safe Mutation 本机执行业务 CLI。
-- 已新增 `src/agent1024` MVP 骨架：PRE_TOOL_USE handler、USER_MESSAGE_RECEIVED handler、notifier、runtime executor、mock runtime executor、payload mapper、response types、SQLite store、MySQL store 初稿、webhook server、本地启动入口、approval card renderer、shell exec client。
+- 已新增 `src/agent1024` MVP 骨架：PRE_TOOL_USE handler、USER_MESSAGE_RECEIVED handler、notifier、runtime executor、mock runtime executor、payload mapper、response types、SQLite store、MySQL store 初稿、webhook server、本地启动入口、shell exec client。
 - 已新增 `src/agent1024/safe-mutation-context.ts` 和 `test/agent1024/safe-mutation-context.test.ts`，覆盖 succeeded/conflict/failed/expired/cancelled 口径。
 - 已新增 `test/agent1024/sqlite-plan-store.test.ts`，覆盖 create/get/list、CAS、version、终态回跳和 approvalPrincipal 查询。
 - 已新增 `test/agent1024/adapter.test.ts`，覆盖受保护 CLI 首次 block + IM 投递、用户确认后执行冻结 plan 并返回 `extraContext.safeMutationContext`。
-- 已新增 `test/agent1024/approval-card.test.ts`、`test/agent1024/webhook-server.test.ts`、`test/agent1024/shell-exec-client.test.ts`。
+- 已新增 `test/agent1024/webhook-server.test.ts`、`test/agent1024/shell-exec-client.test.ts`。
 
 下一轮优先级按以下顺序执行。
 

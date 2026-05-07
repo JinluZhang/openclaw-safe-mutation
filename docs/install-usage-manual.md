@@ -240,7 +240,7 @@ python3 skills/mock-full-reduction-config/scripts/mock_full_reduction_cli.py wri
 取消 plan_xxx
 ```
 
-未来或渠道侧如果把确认消息渲染成按钮/卡片，可以把 `planId` 作为隐藏句柄放入回调载荷，让用户点击“确认”或“取消”；后端仍然走同一套 plan 状态、审批身份和过期校验。
+未来或渠道侧如果把确认消息渲染成按钮/卡片，点击事件也应由 1024Agent 转成普通用户消息，例如 `确认 plan_xxx` 或 `取消 plan_xxx`；Safe Mutation 后端仍然只通过 `USER_MESSAGE_RECEIVED` webhook 消费文本 ACK。
 
 ## 6. 批量部署建议
 
@@ -297,14 +297,14 @@ chmod +x "$WORKSPACE/skills/mock-full-reduction-config/scripts/mock_full_reducti
 1024Agent 适配层提供 HTTP webhook 入口，用于配置到 1024Agent 平台的 Webhook 回调页面。当前实现包含两个拦截类事件：
 
 ```text
-POST /webhook/safe-mutation/pre-tool-use
+POST /webhook/safe-mutation/pre_tool_use
 POST /webhook/safe-mutation/user-message-received
 GET  /webhook/safe-mutation/healthz
 ```
 
 平台配置时：
 
-- `PRE_TOOL_USE` 事件填写 `/webhook/safe-mutation/pre-tool-use`
+- `PRE_TOOL_USE` 事件填写 `/webhook/safe-mutation/pre_tool_use`
 - `USER_MESSAGE_RECEIVED` 事件填写 `/webhook/safe-mutation/user-message-received`
 - 调用类型选择 HTTP 回调
 - 超时时间使用 5000ms
@@ -330,10 +330,10 @@ curl -sS http://localhost:10086/webhook/safe-mutation/healthz
 {"ok":true}
 ```
 
-`pre-tool-use` smoke test：
+`pre_tool_use` smoke test：
 
 ```bash
-curl -sS -X POST http://localhost:10086/webhook/safe-mutation/pre-tool-use \
+curl -sS -X POST http://localhost:10086/webhook/safe-mutation/pre_tool_use \
   -H 'Content-Type: application/json' \
   -d '{
     "event": "PRE_TOOL_USE",
@@ -372,8 +372,6 @@ AGENT1024_SHELL_EXEC_BASE_URL=https://1024.inf.test.sankuai.com
 AGENT1024_SHELL_EXEC_API_KEY=<test-api-key>
 AGENT1024_WEBHOOK_PORT=10086
 AGENT1024_WEBHOOK_PATH_PREFIX=/webhook/safe-mutation
-AGENT1024_APPROVAL_CALLBACK_URL=http://localhost:10086/webhook/safe-mutation/user-message-received
-AGENT1024_APPROVAL_CARD_METHOD=POST
 ```
 
 启动时加载本地配置：
@@ -427,8 +425,8 @@ Header: X-API-Key: <api-key>
 - `AGENT1024_SHELL_EXEC_API_KEY`：1024 API Key，运行时作为 `X-API-Key` 请求头发送
 - `AGENT1024_SHELL_EXEC_TIMEOUT_MS`：默认命令超时，单位毫秒
 - `AGENT1024_EXEC_MIS`：执行 shell exec 时传入的默认 MIS；如果 webhook payload 中已有 `userMis`，适配层会优先使用请求上下文
-- `AGENT1024_APPROVAL_CALLBACK_URL`：审批卡片按钮回调地址，通常指向本服务的 `/webhook/safe-mutation/user-message-received`
-- `AGENT1024_APPROVAL_CARD_METHOD`：审批卡片按钮请求方法，支持 `GET` 或 `POST`，默认 `POST`
+
+确认单按纯文本发送。如果 1024Agent 前端卡片产生点击事件，平台应将点击转换成一条普通用户消息，例如 `确认 <planId>` 或 `取消 <planId>`；Safe Mutation 只通过 `/webhook/safe-mutation/user-message-received` 消费这条消息。
 
 ### 7.4 部署注意事项
 

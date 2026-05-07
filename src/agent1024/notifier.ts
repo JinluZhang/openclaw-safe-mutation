@@ -2,15 +2,12 @@ import type {
   MutationPlan,
   ApprovalDeliveryStatus
 } from "../core/intent-types.js";
-import type { Agent1024CommonActionCard } from "./approval-card.js";
 import type { Agent1024PreToolUsePayload } from "./response-types.js";
 
 export interface Agent1024ApprovalNotificationInput {
   payload: Agent1024PreToolUsePayload;
   plan: MutationPlan;
   text: string;
-  card?: Agent1024CommonActionCard;
-  cardMessage?: string;
 }
 
 export interface Agent1024ApprovalNotificationResult {

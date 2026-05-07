@@ -87,11 +87,11 @@ describe("agent1024 webhook server", () => {
     });
   });
 
-  it("routes PRE_TOOL_USE callbacks to the pre-tool-use handler", async () => {
+  it("routes PRE_TOOL_USE callbacks to the pre_tool_use handler", async () => {
     await withServer(async (baseUrl) => {
       const response = await postJson(
         baseUrl,
-        "/webhook/safe-mutation/pre-tool-use",
+        "/webhook/safe-mutation/pre_tool_use",
         {
           event: "PRE_TOOL_USE",
           paas: "wm",
@@ -150,7 +150,7 @@ describe("agent1024 webhook server", () => {
     await withServer(async (baseUrl) => {
       const response = await postJson(
         baseUrl,
-        "/webhook/safe-mutation/pre-tool-use",
+        "/webhook/safe-mutation/pre_tool_use",
         {
           event: "USER_MESSAGE_RECEIVED",
           paas: "wm",

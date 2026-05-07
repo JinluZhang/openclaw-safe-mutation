@@ -11,7 +11,7 @@ Current architecture:
 - `src/openclaw/`: OpenClaw plugin adapter.
   Includes OpenClaw `before_tool_call` guard and file-backed plan store.
 - `src/agent1024/`: 1024Agent adapter.
-  Includes webhook callbacks, shell exec client, runtime adapters, approval card rendering, local webhook server, SQLite/MySQL plan stores, and notifier interfaces.
+  Includes webhook callbacks, shell exec client, runtime adapters, text approval notification, local webhook server, SQLite/MySQL plan stores, and notifier interfaces.
 - legacy `src/*` re-export paths remain for compatibility. Prefer editing `src/core/**`, `src/openclaw/**`, or `src/agent1024/**` directly.
 
 Core invariant: protected writes must be explicitly configured through `protectedMutations`. Never infer a read path from command names, script names, or flag names. Missing binding/read configuration should fail closed.
@@ -34,7 +34,7 @@ Models must not regenerate or alter payload after approval.
 
 Webhook endpoints exposed by `src/agent1024/webhook-server.ts`:
 
-- `POST /webhook/safe-mutation/pre-tool-use`
+- `POST /webhook/safe-mutation/pre_tool_use`
 - `POST /webhook/safe-mutation/user-message-received`
 - `GET /webhook/safe-mutation/healthz`
 
@@ -56,21 +56,13 @@ AGENT1024_SHELL_EXEC_BASE_URL=https://1024.inf.test.sankuai.com
 AGENT1024_SHELL_EXEC_API_KEY=<secret>
 AGENT1024_WEBHOOK_PORT=10086
 AGENT1024_WEBHOOK_PATH_PREFIX=/webhook/safe-mutation
-AGENT1024_APPROVAL_CALLBACK_URL=http://localhost:10086/webhook/safe-mutation/user-message-received
-AGENT1024_APPROVAL_CARD_METHOD=POST
 ```
 
 Do not write real API keys into tracked files, docs, tests, or commit messages.
 
 1024 shell execution uses `POST /openapi-v3/shell/exec` with header `X-API-Key`. The default base URL in code is the test environment, `https://1024.inf.test.sankuai.com`; stage/prod should override via env.
 
-Approval card rendering uses `commonAction` card syntax:
-
-```text
-:::{"cardType":"commonAction","cardContent":{...}}:::
-```
-
-The renderer supports confirm/cancel `REQUEST` buttons that call back into `/webhook/safe-mutation/user-message-received`.
+Approval notification is plain text. If the 1024Agent frontend shows clickable actions, the click is expected to send a normal user message such as `确认 <planId>` or `取消 <planId>` back into 1024Agent; Safe Mutation only consumes that message through `/webhook/safe-mutation/user-message-received`.
 
 ## Commands
 
@@ -91,7 +83,7 @@ For local webhook smoke testing:
 
 ```bash
 curl -sS http://localhost:10086/webhook/safe-mutation/healthz
-curl -sS -X POST http://localhost:10086/webhook/safe-mutation/pre-tool-use \
+curl -sS -X POST http://localhost:10086/webhook/safe-mutation/pre_tool_use \
   -H 'Content-Type: application/json' \
   -d '{"event":"PRE_TOOL_USE","paas":"wm","conversationId":"conv-local","userMis":"zhangjinlu","toolName":"bash_execute","toolArguments":{"command":"echo hello"},"timestamp":1778110000000}'
 ```

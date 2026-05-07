@@ -293,6 +293,6 @@ ACK 是必须的，但 ACK 的外形不是必须的。
 - `approvedPlanId` 重试路径仍保留为未来结构化审批后的兼容形态；若走该形态，只有与冻结内容完全一致的重试请求才允许继续
 - 审批身份校验以 `channel + senderId` 为主，`accountId` 作为可选增强
 - 不再把 `sessionKey` 当成确认前提
-- `planId` 可作为隐藏确认句柄放入 callback payload，不要求展示给用户
+- `planId` 可作为隐藏确认句柄放入确认/取消消息载荷，不要求展示给用户
 
 当前项目里 `mock-full-reduction-config` 只是这套能力的测试 skill。真正要交付的，是一套干净、统一、可批量覆盖新 skill 的 hook 兜底机制。

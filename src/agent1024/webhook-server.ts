@@ -203,7 +203,7 @@ export function createAgent1024WebhookRequestHandler(
         return;
       }
 
-      if (path === `${pathPrefix}/pre-tool-use`) {
+      if (path === `${pathPrefix}/pre_tool_use`) {
         await dispatchWebhook({
           dependencies,
           options: resolvedOptions,
