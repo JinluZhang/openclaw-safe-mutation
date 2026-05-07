@@ -6,3 +6,4 @@ export * from "./notifier.js";
 export * from "./payload-mapper.js";
 export * from "./response-types.js";
 export * from "./runtime-executor.js";
+export * from "./shell-exec-client.js";
