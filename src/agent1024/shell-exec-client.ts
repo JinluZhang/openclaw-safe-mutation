@@ -21,7 +21,7 @@ interface Agent1024ShellExecResponse {
   } | null;
 }
 
-const DEFAULT_BASE_URL = "https://1024.sankuai.com";
+const DEFAULT_BASE_URL = "https://1024.inf.test.sankuai.com";
 const SHELL_EXEC_PATH = "/openapi-v3/shell/exec";
 
 function trimTrailingSlash(value: string): string {

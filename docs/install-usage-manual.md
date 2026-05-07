@@ -292,7 +292,152 @@ chmod +x "$WORKSPACE/skills/mock-full-reduction-config/scripts/mock_full_reducti
 
 回滚时同时回滚插件和 skill。只回滚其中一个可能导致 binding、CLI flag、字段目录不一致。
 
-## 7. 生产接入真实 Skill 的差异
+## 7. 1024Agent Webhook 本地联调与部署配置
+
+1024Agent 适配层提供 HTTP webhook 入口，用于配置到 1024Agent 平台的 Webhook 回调页面。当前实现包含两个拦截类事件：
+
+```text
+POST /webhook/safe-mutation/pre-tool-use
+POST /webhook/safe-mutation/user-message-received
+GET  /webhook/safe-mutation/healthz
+```
+
+平台配置时：
+
+- `PRE_TOOL_USE` 事件填写 `/webhook/safe-mutation/pre-tool-use`
+- `USER_MESSAGE_RECEIVED` 事件填写 `/webhook/safe-mutation/user-message-received`
+- 调用类型选择 HTTP 回调
+- 超时时间使用 5000ms
+- 本服务默认错误策略是返回 `decision=block`；如需要按平台 fail-open 语义放行，可在启动时设置 `AGENT1024_WEBHOOK_FAIL_OPEN=1`
+
+### 7.1 本地启动
+
+本地联调默认监听 8080：
+
+```bash
+npm run dev:agent1024-webhook
+```
+
+启动后可以用下面命令确认服务可用：
+
+```bash
+curl -sS http://localhost:8080/webhook/safe-mutation/healthz
+```
+
+期望返回：
+
+```json
+{"ok":true}
+```
+
+`pre-tool-use` smoke test：
+
+```bash
+curl -sS -X POST http://localhost:8080/webhook/safe-mutation/pre-tool-use \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "event": "PRE_TOOL_USE",
+    "paas": "wm",
+    "conversationId": "conv-local",
+    "userMis": "zhangjinlu",
+    "toolName": "bash_execute",
+    "toolCallId": "call-local",
+    "toolArguments": {"command": "echo hello"},
+    "timestamp": 1778110000000
+  }'
+```
+
+未配置受保护 binding 时，期望返回：
+
+```json
+{"decision":"allow"}
+```
+
+### 7.2 本地密钥与环境配置
+
+不要把 1024 API Key 写入代码、文档、`.gitignore` 或任何会提交到 git 的文件。推荐在仓库本地创建不受版本管理的环境目录：
+
+```bash
+mkdir -p .agent1024
+chmod 700 .agent1024
+touch .agent1024/test.env
+chmod 600 .agent1024/test.env
+grep -qxF '.agent1024/' .git/info/exclude || printf '%s\n' '.agent1024/' >> .git/info/exclude
+```
+
+测试环境配置写入 `.agent1024/test.env`：
+
+```bash
+AGENT1024_SHELL_EXEC_BASE_URL=https://1024.inf.test.sankuai.com
+AGENT1024_SHELL_EXEC_API_KEY=<test-api-key>
+AGENT1024_WEBHOOK_PORT=8080
+AGENT1024_WEBHOOK_PATH_PREFIX=/webhook/safe-mutation
+AGENT1024_APPROVAL_CALLBACK_URL=http://localhost:8080/webhook/safe-mutation/user-message-received
+AGENT1024_APPROVAL_CARD_METHOD=POST
+```
+
+启动时加载本地配置：
+
+```bash
+set -a
+source .agent1024/test.env
+set +a
+npm run dev:agent1024-webhook
+```
+
+当前 shell exec client 的默认 Base URL 是测试环境 `https://1024.inf.test.sankuai.com`。后续 stage/prod 环境不要改代码，新增本地 env 文件覆盖即可：
+
+```text
+.agent1024/stage.env
+.agent1024/prod.env
+```
+
+示例：
+
+```bash
+set -a
+source .agent1024/stage.env
+set +a
+npm run dev:agent1024-webhook
+```
+
+### 7.3 1024 Shell Exec 接口配置
+
+Safe Mutation 在 1024Agent 下执行冻结 plan 时，会通过 `Agent1024ShellExecClient` 调用 1024 shell exec 接口：
+
+```text
+POST /openapi-v3/shell/exec
+Header: X-API-Key: <api-key>
+```
+
+请求体包含：
+
+```json
+{
+  "command": "python3 /path/to/script.py",
+  "workdir": "/path/to",
+  "timeout": 60000,
+  "mis": "zhangjinlu"
+}
+```
+
+对应环境变量：
+
+- `AGENT1024_SHELL_EXEC_BASE_URL`：1024 环境域名，测试环境为 `https://1024.inf.test.sankuai.com`
+- `AGENT1024_SHELL_EXEC_API_KEY`：1024 API Key，运行时作为 `X-API-Key` 请求头发送
+- `AGENT1024_SHELL_EXEC_TIMEOUT_MS`：默认命令超时，单位毫秒
+- `AGENT1024_EXEC_MIS`：执行 shell exec 时传入的默认 MIS；如果 webhook payload 中已有 `userMis`，适配层会优先使用请求上下文
+- `AGENT1024_APPROVAL_CALLBACK_URL`：审批卡片按钮回调地址，通常指向本服务的 `/webhook/safe-mutation/user-message-received`
+- `AGENT1024_APPROVAL_CARD_METHOD`：审批卡片按钮请求方法，支持 `GET` 或 `POST`，默认 `POST`
+
+### 7.4 部署注意事项
+
+- 本地 `.agent1024/*.env` 必须保持在 `.git/info/exclude` 中，避免误提交密钥。
+- 测试、stage、prod 使用不同 env 文件和不同 API Key；部署时由机器环境或密钥系统注入。
+- 平台 Webhook 的“自定义请求头”可先留空；如果后续增加服务端鉴权，再在 webhook server 增加 header 校验并在平台配置对应 token。
+- 如果回调服务部署在内网机器，确保 1024Agent 平台能访问对应 HTTP URL。
+
+## 8. 生产接入真实 Skill 的差异
 
 mock skill 现在也需要通过 `protectedMutations` 显式配置 binding；真实 skill 接入时同样应声明自己的字段 schema 和读写路径：
 
@@ -359,7 +504,7 @@ mock skill 现在也需要通过 `protectedMutations` 显式配置 binding；真
 - 写后能通过 read 或 verify invocation 回读验证。
 - 未知 flag、缺少目标 ID、缺少读配置时 fail closed。
 
-## 8. 故障排查
+## 9. 故障排查
 
 ### 插件没有拦截写命令
 
@@ -389,7 +534,7 @@ mock skill 现在也需要通过 `protectedMutations` 显式配置 binding；真
 
 说明写调用或回读验证失败。检查 plan result 中的 `writeStdout`、`writeStderr`、`verifySnapshot`，以及 CLI 是否能手工读写。
 
-## 9. 最小验收清单
+## 10. 最小验收清单
 
 每台实例安装后至少验证：
 

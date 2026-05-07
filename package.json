@@ -19,6 +19,8 @@
     "README.md"
   ],
   "scripts": {
+    "build:local": "tsc --noEmit false --outDir dist",
+    "dev:agent1024-webhook": "npm run build:local && node dist/src/agent1024/local-webhook-server.js",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:unit && npm run test:integration && npm run test:seams && npm run test:agent1024",
     "test:unit": "vitest run test/unit",
